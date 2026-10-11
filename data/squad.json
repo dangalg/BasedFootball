@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "players": [
+    {"id": "ari", "name": "ARI", "number": 7, "role": "Runner", "mass": 72.0, "pace": 6.9, "touch": 0.8, "stamina": 1.05},
+    {"id": "noa", "name": "NOA", "number": 10, "role": "Creator", "mass": 75.0, "pace": 6.6, "touch": 1.0, "stamina": 1.0},
+    {"id": "sam", "name": "SAM", "number": 4, "role": "Anchor", "mass": 84.0, "pace": 6.1, "touch": 0.85, "stamina": 1.1}
+  ]
+}

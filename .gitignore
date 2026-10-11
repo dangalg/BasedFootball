@@ -1,0 +1,5 @@
+.godot/
+build/
+evidence/
+*.tmp
+export_credentials.cfg
