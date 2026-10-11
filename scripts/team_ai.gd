@@ -43,13 +43,32 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	player.intent = direction.normalized() if direction.length() > 0.65 else Vector3.ZERO
 	player.aim = player.intent if player.intent.length_squared() > 0.1 else Vector3(attack, 0, 0)
 	player.sprint = nearest == player and direction.length() > 4 and player.energy > 0.25
+	# Defenders use the same finite contact windows and recovery as the controller.
+	if ball.last_touch_team != player.team and ball.last_touch_team >= 0 and nearest == player:
+		for opponent in players:
+			if opponent.team == player.team:
+				continue
+			var separation := opponent.global_position - player.global_position
+			separation.y = 0
+			if separation.length() < 0.92 and absf(separation.normalized().dot(player.aim)) < 0.8:
+				if player.shoulder(ball):
+					return "shoulder"
+		var ball_offset := ball.global_position - player.global_position
+		ball_offset.y = 0
+		if ball_offset.length() < 1.25:
+			player.aim = ball_offset.normalized()
+			if player.tackle(ball):
+				return "tackle"
+		elif ball_offset.length() < 2.6 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
+			if player.slide(ball):
+				return "slide"
 	if not player.reach_ball(ball):
 		return ""
 	var shot_direction := goal - player.global_position
 	shot_direction.y = 0
 	if absf(goal.x - player.global_position.x) < 10 and absf(player.global_position.z) < 6:
 		player.aim = shot_direction.normalized()
-		if player.kick(ball, player.aim, 17.0, 1.2):
+		if player.kick(ball, player.aim, 17.0, 1.2, "shot"):
 			return "shot"
 	# A defender under pressure finds an advanced teammate, using the same kick.
 	var pressured := false
@@ -69,6 +88,6 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if receiver != null and best > 0.5:
 			var pass_direction := receiver.global_position - player.global_position
 			pass_direction.y = 0
-			if player.kick(ball, pass_direction, clampf(pass_direction.length() * 1.3, 7, 14), 0.25):
+			if player.kick(ball, pass_direction, clampf(pass_direction.length() * 1.3, 7, 14), 0.12, "pass"):
 				return "pass"
 	return ""

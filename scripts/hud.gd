@@ -15,44 +15,60 @@ var status: Label
 var selected_number: Label
 var banner_timer: float = 0.0
 
+const INK := Color("13232e")
+const PAPER := Color("e1e6da")
+const MUTED := Color("95adaf")
+const GOLD := Color("e9c463")
+
 func _ready() -> void:
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
-	var top := _panel(root, Vector2(28, 24), Vector2(260, 72))
-	_label(top, "BASED / FOOTBALL", 24, Color("f3efdd"), Vector2(18, 9))
-	_label(top, "3 v 3     •     THE COURTYARD", 12, Color("9bb8bf"), Vector2(19, 44))
-	var score_panel := _panel(root, Vector2(490, 24), Vector2(460, 76))
-	scoreboard = _label(score_panel, "HOME  0     :     0  AWAY", 29, Color("f3efdd"), Vector2(30, 5))
-	timer_label = _label(score_panel, "03:00", 18, Color("ffd56a"), Vector2(200, 45))
-	var rules := _panel(root, Vector2(1114, 24), Vector2(298, 72))
-	_label(rules, "ONE BALL. SAME RULES.", 18, Color("f3efdd"), Vector2(18, 10))
-	_label(rules, "No keepers  /  Rebound boards", 14, Color("9bb8bf"), Vector2(18, 40))
-	var player_panel := _panel(root, Vector2(28, 766), Vector2(370, 108))
-	selected_number = _label(player_panel, "07", 42, Color("ffd56a"), Vector2(16, 10))
-	player_label = _label(player_panel, "ARI / RUNNER", 20, Color("f3efdd"), Vector2(85, 17))
+	var top := _panel(root, Vector2(24, 22), Vector2(244, 60))
+	var badge := TextureRect.new()
+	badge.texture = preload("res://assets/branding/based-football.png")
+	badge.position = Vector2(12, 12)
+	badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	top.add_child(badge)
+	badge.size = Vector2(36, 36)
+	_label(top, "BASED FOOTBALL", 19, PAPER, Vector2(58, 10))
+	_label(top, "3 v 3  /  THE COURTYARD", 11, MUTED, Vector2(59, 35))
+	var score_panel := _panel(root, Vector2(552, 18), Vector2(336, 70))
+	_label(score_panel, "HOME", 14, Color("71b2db"), Vector2(30, 17))
+	_label(score_panel, "AWAY", 14, Color("eb9a7f"), Vector2(263, 17))
+	scoreboard = _label(score_panel, "0  :  0", 28, PAPER, Vector2(98, 4))
+	scoreboard.size.x = 140
+	scoreboard.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timer_label = _label(score_panel, "03:00", 15, GOLD, Vector2(138, 43))
+	var rules := _panel(root, Vector2(1184, 22), Vector2(232, 60))
+	_label(rules, "ONE BALL. SAME RULES.", 15, PAPER, Vector2(16, 10))
+	_label(rules, "No keepers  /  Rebound boards", 12, MUTED, Vector2(16, 35))
+	var player_panel := _panel(root, Vector2(24, 802), Vector2(314, 74))
+	selected_number = _label(player_panel, "07", 32, GOLD, Vector2(14, 6))
+	player_label = _label(player_panel, "ARI / RUNNER", 17, PAPER, Vector2(68, 13))
 	energy_bar = ProgressBar.new()
-	energy_bar.position = Vector2(87, 55)
-	energy_bar.size = Vector2(254, 9)
+	energy_bar.position = Vector2(70, 43)
 	energy_bar.show_percentage = false
 	energy_bar.add_theme_stylebox_override("fill", _style(Color("42bfaf"), 4))
 	energy_bar.add_theme_stylebox_override("background", _style(Color("304653"), 4))
 	player_panel.add_child(energy_bar)
-	_label(player_panel, "STAMINA", 11, Color("9bb8bf"), Vector2(87, 69))
+	energy_bar.size = Vector2(225, 6)
+	_label(player_panel, "STAMINA", 10, MUTED, Vector2(70, 52))
 	charge_bar = ProgressBar.new()
-	charge_bar.position = Vector2(16, 95)
-	charge_bar.size = Vector2(325, 6)
+	charge_bar.position = Vector2(14, 66)
 	charge_bar.show_percentage = false
 	charge_bar.add_theme_stylebox_override("fill", _style(Color("ffd56a"), 3))
 	charge_bar.add_theme_stylebox_override("background", _style(Color("304653"), 3))
 	player_panel.add_child(charge_bar)
-	var help := _panel(root, Vector2(430, 806), Vector2(982, 68))
-	_label(help, "A  PASS     B  HOLD / SHOOT     X  TACKLE     RT  SPRINT     LB  SWITCH", 17, Color("e9eddf"), Vector2(20, 10))
-	_label(help, "Left stick: move + aim     Right stick: select teammate     Menu: pause     Keyboard: WASD / Space / J / K / Shift / Tab", 12, Color("9bb8bf"), Vector2(20, 39))
-	status = _label(root, "", 15, Color("c4d6d6"), Vector2(31, 109))
-	banner = _label(root, "", 32, Color("ffd56a"), Vector2(340, 153))
-	banner.size.x = 760
+	charge_bar.size = Vector2(281, 4)
+	var help := _panel(root, Vector2(716, 818), Vector2(700, 58))
+	_label(help, "CROSS PASS   CIRCLE SHOT / TACKLE   SQUARE LOB / SLIDE   TRIANGLE THROUGH", 13, PAPER, Vector2(18, 9))
+	_label(help, "R2 sprint • L2 shield / jockey • L1 / right stick switch • Options pause • WASD / Space / J / K / L / H", 11, MUTED, Vector2(18, 34))
+	status = _label(root, "", 11, MUTED, Vector2(28, 91))
+	banner = _label(root, "", 24, GOLD, Vector2(460, 105))
+	banner.size = Vector2(520, 36)
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	overlay = PanelContainer.new()
 	overlay.position = Vector2(365, 250)
@@ -85,7 +101,12 @@ func _panel(parent: Control, pos: Vector2, dimensions: Vector2) -> Panel:
 	var panel := Panel.new()
 	panel.position = pos
 	panel.size = dimensions
-	panel.add_theme_stylebox_override("panel", _style(Color(0.035, 0.075, 0.115, 0.93), 12))
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_to_group("hud_panels")
+	var style := _style(Color(INK, 0.9), 10)
+	style.border_color = Color("31464d")
+	style.set_border_width_all(1)
+	panel.add_theme_stylebox_override("panel", style)
 	parent.add_child(panel)
 	return panel
 
@@ -105,7 +126,7 @@ func _label(parent: Control, value: String, size: int, color: Color, pos: Vector
 	return label
 
 func update_match(scores: Array[int], remaining: float, player: FootballPlayer, charge: float) -> void:
-	scoreboard.text = "HOME  %d     :     %d  AWAY" % [scores[0], scores[1]]
+	scoreboard.text = "%d  :  %d" % [scores[0], scores[1]]
 	var seconds := int(ceil(remaining))
 	timer_label.text = "%02d:%02d" % [seconds / 60, seconds % 60]
 	selected_number.text = "%02d" % player.shirt_number

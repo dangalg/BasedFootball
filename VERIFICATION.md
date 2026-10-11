@@ -141,3 +141,53 @@ setup check parsed the SVG and decoded the PNG and all seven ICO sizes
 confirmed the new ICO path, unchanged playable target and empty arguments.
 The game was not launched. Windows desktop icon-cache refresh remains unverified.
 The intended source/artwork files are committed locally on `main`, without push.
+
+## Physical touches, athletes and running direction - 2026-10-11
+
+The current build supersedes the historical handling results above. It uses a
+22 cm, 430 g free ball, roughly 1.8 m procedural athletes, PlayStation Classic
+contextual controls, contact-timed dribble/kick impulses and three challenges.
+Running faces actual horizontal velocity; action facing and jockeying remain
+separate. Backpedalling reverses the gait. A kickoff clears the old possession
+marker so opponents can control their own restart.
+
+Earlier failures were preserved and corrected through the approved revised work:
+
+- `run_1791744221882_b1e4dd20084a418baf823f26d10f29da`: 70/73;
+  turn/stop control and an overly strict shoulder separation check failed.
+- `run_1791745729047_e6645e5428af48799a8e03275f3360a4`: 79/82;
+  the first timed-touch version lost control on turns and snapped the leg pose.
+  Earlier trap scheduling, foot tracking before contact and angular limits fixed these.
+- `run_1791745962625_a730d0a40ac741f89ca15958435dace9`: 8/9;
+  live decisions exposed the stale kickoff ownership marker.
+- `run_1791746273937_9830d1280c09416cba75d1a91ed0d264`: 9/10;
+  facing passed, but a home-dominated, goalless opening had no orange dribble
+  contacts. The scenario now starts with an orange kickoff to exercise their
+  possession path directly; subsequent play uses normal match rules.
+
+Final rebuilt-pack results:
+
+| Scenario | Result | Evidence run |
+| --- | --- | --- |
+| Handling and tackles | 82/82 | `run_1791746335614_047cdc70929d4cdc84005ea09eea12b6` |
+| Reactive decisions against normal AI | 10/10 | `run_1791746381889_bc42aad549fd44f399b070812f5c6bb8` |
+
+Handling gaps peaked at 0.782 m during ordinary turns, 0.624 m during sustained
+sprint and 0.678 m during a fast turn. Stopping left a 0.599 m gap and 0.0136 m/s
+ball speed. All contact, miss, slide recovery, physical shoulder, flight and leg
+blend checks passed. Thirty-six rendered frames include walk/sprint sequences;
+selected close-up frames were inspected.
+
+The live session made 171 reactive decisions and seven completed kicks; blue and
+orange made 29 and 10 dribble contacts. Ordinary running faced away from velocity
+in 11/7,832 blue and 21/7,793 orange samples, within brief turning transitions
+under the 3 percent test limit. This is not a zero-transition or subjective
+animation-quality claim. Normal AI, goals and ball physics were active. Both final
+runs exited successfully without runtime errors; game-dev capture verification
+confirmed the closed artifact rosters and hashes.
+
+Evidence lives beneath `evidence/game-dev/.game-dev/runs/` and is Git-ignored.
+Tests disable hardware input and do not overwrite normal career data. These are
+rendered production-physics checks plus a short reactive decision session, not
+hardware-controller validation, balance testing, subjective feel or a GPU benchmark.
+The rebuilt local executable is available through the desktop shortcut. No push.

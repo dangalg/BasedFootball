@@ -1,0 +1,59 @@
+{
+  "schema": "game_dev.adapter.v1",
+  "id": "based-football",
+  "name": "Based Football local verification",
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "visual-scene-check",
+      "title": "Windowless courtyard scene integrity",
+      "description": "Loads the rebuilt game pack with Godot's headless dummy renderer. Checks scene assets, HUD bounds and preserved collisions; supplies no pixel or GPU evidence.",
+      "command": {
+        "executable": "tools/visual_scene_check.mjs",
+        "runtime": "node",
+        "arguments": [],
+        "workingDirectory": "."
+      },
+      "timeoutSeconds": 30,
+      "capabilities": ["cpu", "project-write"],
+      "parameters": {},
+      "outputs": {
+        "format": "game-dev-capture-v1",
+        "path": "staging/capture.json"
+      }
+    },
+    {
+      "id": "handling-and-tackles",
+      "title": "Classic controls, contact-timed kicks and physical handling",
+      "description": "One bounded rendered sequence exercising turns, stops, free-running versus carrying, a slide against a moving carrier, three challenges, contextual PlayStation actions and low/lofted kick flight. Saves 36 production scene and animation frames; does not inject hardware input or benchmark hardware.",
+      "command": {
+        "executable": "tools/visual_scene_check.mjs",
+        "runtime": "node",
+        "arguments": ["rendered"],
+        "workingDirectory": "."
+      },
+      "timeoutSeconds": 60,
+      "capabilities": ["cpu", "project-write", "gpu", "opengl"],
+      "parameters": {},
+      "outputs": {
+        "format": "game-dev-capture-v1",
+        "path": "staging/capture.json"
+      }
+    },
+    {
+      "id": "decision-match",
+      "title": "Reactive controller against normal match AI",
+      "description": "Thirty seconds of current-state controller decisions, normal teammate/opponent AI, production match rules and physics. No hardware input; captures actions and rendered match frames, not subjective fun.",
+      "command": {
+        "executable": "tools/visual_scene_check.mjs",
+        "runtime": "node",
+        "arguments": ["decisions"],
+        "workingDirectory": "."
+      },
+      "timeoutSeconds": 60,
+      "capabilities": ["cpu", "project-write", "gpu", "opengl"],
+      "parameters": {},
+      "outputs": {"format": "game-dev-capture-v1", "path": "staging/capture.json"}
+    }
+  ]
+}
