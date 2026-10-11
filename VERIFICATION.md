@@ -58,3 +58,43 @@ Local source commit on `main`. Origin is the user-supplied
 `https://github.com/dangalg/BasedFootball.git`; no push is authorized or performed.
 Normal launch through `Play.cmd` or the executable has no injected test controls.
 No tuning or behavioral changes were made after the focused session.
+
+## Close control update — 2026-10-11
+
+Small stick movements now scale dribble touches with requested and actual player
+speed. Reach-limited impulses guide the ball around the player on turns and settle
+a nearby ground ball when input is released. Sprint pushes remain longer. Fast
+relative motion, height and reach limits preserve loose balls and physical tackles.
+The shared controller applies these rules to humans and AI. Player rigid bodies
+now have `can_sleep = false`, so movement forces respond after standing still.
+
+The first approved dribble session failed because the player stayed stationary;
+its report, trace, log and six images are preserved in
+`evidence/dribble-attempt-1/`. After explicit approval, the only additional gameplay
+change was keeping player bodies awake. The same test with unchanged criteria was
+run once after a clean rebuild and **passed all 11 assertions**:
+
+- Walking and left/right turns physically moved the player.
+- Close-control ball gap peaked at **0.8405 m**, with mean **0.7959 m**.
+- Stopping left a **0.7978 m** gap and **0.0046 m/s** horizontal ball speed.
+- Sprint touches reached a **1.2616 m** gap.
+- The opponent's production tackle broke possession, reaching a **4.0169 m** gap.
+- Out-of-reach and airborne balls received no control touches.
+- All six rendered evidence frames were saved and inspected.
+
+The sequence uses production rigid bodies and actions with direct player intents;
+match input and opponent AI decisions are disabled during this isolated test.
+It injects no gamepad events and cannot overlap human match controls. Career data
+is not saved by the sequence. Results are in `evidence/dribble-acceptance.json`,
+`dribble-trace.json`, `dribble-acceptance.log`, and `dribble_*.png`. The passing
+runtime log contained no errors. Hardware controller feel, full-match AI behavior
+with the new touches, and subjective fun remain unverified.
+
+Build output was excluded from Godot scanning/export to prevent bundling generated
+runtime files. The user subsequently requested tests stay off the screen used for
+FIFA. Test launch now requests a hidden window at an off-screen position; that
+launcher-only change received a PowerShell structural check, without another
+gameplay run. Normal play stays visible and has no automated test inputs.
+
+Delivery remains a local commit on `main`; no remote push is performed. No gameplay
+tuning or further behavioral test was performed after the passing revised session.

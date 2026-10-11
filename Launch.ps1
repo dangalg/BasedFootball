@@ -1,4 +1,4 @@
-param([switch]$Build, [switch]$Acceptance, [switch]$Editor)
+param([switch]$Build, [switch]$Acceptance, [switch]$DribbleAcceptance, [switch]$Editor)
 $ErrorActionPreference = 'Stop'
 $taskEnginePath = 'C:\Program Files\Godot\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64_console.exe'
 if ($env:GODOT_EXE) { $taskEnginePath = $env:GODOT_EXE }
@@ -7,11 +7,12 @@ $taskEvidencePath = Join-Path $PSScriptRoot 'evidence'
 New-Item -ItemType Directory -Path $taskEvidencePath -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $taskEvidencePath '.gdignore') -Value ''
 if ($Build) {
+    $taskBuildPath = Join-Path $PSScriptRoot 'build'
+    New-Item -ItemType Directory -Path $taskBuildPath -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $taskBuildPath '.gdignore') -Value ''
     $taskBuildLog = Join-Path $taskEvidencePath 'build.log'
     & $taskEnginePath --headless --editor --path $PSScriptRoot --import --quit --log-file $taskBuildLog
     if ($LASTEXITCODE -ne 0 -or (Select-String -LiteralPath $taskBuildLog -Pattern 'SCRIPT ERROR:|^ERROR:' -Quiet)) { throw 'Godot project import failed. See evidence/build.log.' }
-    $taskBuildPath = Join-Path $PSScriptRoot 'build'
-    New-Item -ItemType Directory -Path $taskBuildPath -Force | Out-Null
     $taskExportLog = Join-Path $taskEvidencePath 'export.log'
     & $taskEnginePath --headless --path $PSScriptRoot --export-pack 'Windows Desktop' (Join-Path $taskBuildPath 'BasedFootball.pck') --log-file $taskExportLog
     if ($LASTEXITCODE -ne 0 -or (Select-String -LiteralPath $taskExportLog -Pattern 'SCRIPT ERROR:|^ERROR:' -Quiet)) { throw 'Game pack export failed. See evidence/export.log.' }
@@ -27,12 +28,15 @@ if ($Build) {
     exit 0
 }
 if ($Editor) { & $taskEnginePath --editor --path $PSScriptRoot; exit $LASTEXITCODE }
-if ($Acceptance) {
+if ($Acceptance -or $DribbleAcceptance) {
     $taskPlayable = Join-Path $PSScriptRoot 'build\BasedFootball.exe'
     if (-not (Test-Path -LiteralPath $taskPlayable)) { throw 'Build before acceptance.' }
     $env:BASED_FOOTBALL_EVIDENCE = $taskEvidencePath
-    $taskAcceptanceLog = Join-Path $taskEvidencePath 'acceptance.log'
-    $taskGame = Start-Process -FilePath $taskPlayable -ArgumentList @('--log-file', ('"' + $taskAcceptanceLog + '"'), '--', '--acceptance') -WorkingDirectory (Split-Path -Parent $taskPlayable) -WindowStyle Normal -PassThru
+    $taskTestArgument = if ($DribbleAcceptance) { '--dribble-acceptance' } else { '--acceptance' }
+    $taskLogName = if ($DribbleAcceptance) { 'dribble-acceptance.log' } else { 'acceptance.log' }
+    $taskAcceptanceLog = Join-Path $taskEvidencePath $taskLogName
+    # Render off-screen and request a hidden window so tests do not cover another game.
+    $taskGame = Start-Process -FilePath $taskPlayable -ArgumentList @('--position', '30000,30000', '--log-file', ('"' + $taskAcceptanceLog + '"'), '--', $taskTestArgument) -WorkingDirectory (Split-Path -Parent $taskPlayable) -WindowStyle Hidden -PassThru
     # One native completion wait; no process/status polling.
     $taskGame.WaitForExit()
     exit $taskGame.ExitCode

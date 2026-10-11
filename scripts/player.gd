@@ -30,6 +30,8 @@ var tackle_remaining: float = 0.0
 var match_touches: int = 0
 
 func _ready() -> void:
+	# Movement forces must remain responsive after a player stands still.
+	can_sleep = false
 	lock_rotation = true
 	linear_damp = 0.1
 	angular_damp = 1.0
@@ -130,17 +132,47 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float) 
 	return true
 
 func dribble(ball: FootballBall) -> bool:
-	if touch_cooldown > 0.0 or kick_cooldown > 0.0 or intent.length_squared() < 0.05 or not reach_ball(ball, 1.08):
+	if touch_cooldown > 0.0 or kick_cooldown > 0.0 or tackle_remaining > 0.0 or not reach_ball(ball, 1.08):
+		return false
+	# Ground-level, reach-limited touches only. Fast challenges remain loose balls.
+	if ball.global_position.y > 0.65:
 		return false
 	var relative := ball.global_position - global_position
 	relative.y = 0
-	if relative.dot(intent.normalized()) < -0.25:
+	var player_velocity := Vector3(linear_velocity.x, 0, linear_velocity.z)
+	var ball_velocity := Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z)
+	if (ball_velocity - player_velocity).length() > 5.5:
 		return false
-	var speed := pace + 1.4 if sprint and energy > 0.05 else pace * 0.69
-	var touch_target := intent.normalized() * speed
-	var impulse := (touch_target - Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z)) * ball.mass
-	ball.touch(team, player_id, impulse.limit_length(2.6 * touch_skill))
-	touch_cooldown = 0.24 if sprint else 0.16
+	var stick := minf(intent.length(), 1.0)
+	var is_sprinting := sprint and energy > 0.05 and stick > 0.1
+	var direction := intent.normalized() if stick > 0.05 else aim
+	var target_velocity: Vector3
+	var impulse_limit: float
+	if is_sprinting:
+		if relative.dot(direction) < -0.25:
+			return false
+		# Longer pushes create room for defenders to challenge a sprinting carrier.
+		target_velocity = direction * (pace + 1.4) * stick
+		impulse_limit = 2.6 * touch_skill
+		touch_cooldown = 0.24
+	else:
+		# Follow the current contact side around the body instead of cutting through
+		# the capsule on sharp turns. Each correction is a small physical impulse.
+		var contact_direction := relative.normalized() if relative.length() > 0.1 else direction
+		if stick > 0.05:
+			var angle := contact_direction.signed_angle_to(direction, Vector3.UP)
+			contact_direction = contact_direction.rotated(Vector3.UP, clampf(angle, -0.4, 0.4))
+		var foot_target := contact_direction * 0.8
+		var requested_velocity := intent.limit_length(1.0) * pace * 0.66
+		var carry_velocity := player_velocity.lerp(requested_velocity, 0.3)
+		var correction := ((foot_target - relative) * 7.0).limit_length(3.5)
+		target_velocity = carry_velocity + correction
+		impulse_limit = 0.6 * touch_skill
+		touch_cooldown = 0.055
+	var impulse := (target_velocity - ball_velocity) * ball.mass
+	if impulse.length_squared() < 0.0001:
+		return false
+	ball.touch(team, player_id, impulse.limit_length(impulse_limit))
 	match_touches += 1
 	return true
 

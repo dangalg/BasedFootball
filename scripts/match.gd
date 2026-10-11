@@ -26,7 +26,7 @@ var acceptance: bool = false
 var pause_requested: bool = false
 
 func _ready() -> void:
-	acceptance = "--acceptance" in OS.get_cmdline_user_args()
+	acceptance = "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
 	squad.load_squad(acceptance)
 	_build_pitch()
@@ -53,7 +53,8 @@ func _ready() -> void:
 	_select(0)
 	hud.flash("YOUR TEAM. YOUR GAME.", 3.0)
 	if acceptance:
-		var session: Node = load("res://tests/acceptance.gd").new()
+		var session_path := "res://tests/dribble_acceptance.gd" if "--dribble-acceptance" in OS.get_cmdline_user_args() else "res://tests/acceptance.gd"
+		var session: Node = load(session_path).new()
 		add_child(session)
 		session.begin(self)
 
