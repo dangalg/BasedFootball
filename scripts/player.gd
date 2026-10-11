@@ -28,6 +28,8 @@ var name_label: Label3D
 var step_phase: float = 0.0
 var tackle_remaining: float = 0.0
 var match_touches: int = 0
+var close_control_ball: FootballBall
+var close_control_remaining: float = 0.0
 
 func _ready() -> void:
 	# Movement forces must remain responsive after a player stands still.
@@ -86,6 +88,7 @@ func _physics_process(delta: float) -> void:
 	tackle_cooldown = maxf(0.0, tackle_cooldown - delta)
 	touch_cooldown = maxf(0.0, touch_cooldown - delta)
 	tackle_remaining = maxf(0.0, tackle_remaining - delta)
+	close_control_remaining = maxf(0.0, close_control_remaining - delta)
 	active_seconds += delta
 	if sprint and intent.length_squared() > 0.1:
 		energy = maxf(0.0, energy - delta * 0.07 / stamina_trait)
@@ -107,13 +110,30 @@ func _physics_process(delta: float) -> void:
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	var speed := pace if sprint and energy > 0.05 else pace * 0.66
+	var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
+	# Ease into a turn only while a recent physical touch is still in foot reach.
+	if close_control_remaining > 0.0 and is_instance_valid(close_control_ball) and close_control_ball.last_touch_id == player_id and not (sprint and energy > 0.05):
+		speed *= _turn_speed_scale(close_control_ball, horizontal)
 	var desired := intent.limit_length(1.0) * speed
 	if tackle_remaining > 0.0:
 		desired = aim * 7.3
-	var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
 	var acceleration := (desired - horizontal) * 7.5
 	# The cap preserves collision response and prevents instant direction changes.
 	state.apply_central_force(acceleration.limit_length(24.0) * mass)
+
+func _turn_speed_scale(ball: FootballBall, velocity: Vector3) -> float:
+	if intent.length_squared() < 0.01 or not reach_ball(ball, 1.08) or ball.global_position.y > 0.65:
+		return 1.0
+	var ball_velocity := Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z)
+	if (ball_velocity - velocity).length() > 5.5:
+		return 1.0
+	var direction := intent.normalized()
+	var offset := ball.global_position - global_position
+	offset.y = 0
+	var angle := acos(clampf(offset.normalized().dot(direction), -1.0, 1.0))
+	if velocity.length_squared() > 0.25:
+		angle = maxf(angle, acos(clampf(velocity.normalized().dot(direction), -1.0, 1.0)))
+	return lerpf(1.0, 0.42, smoothstep(0.4, 1.6, angle))
 
 func reach_ball(ball: FootballBall, distance: float = 1.15) -> bool:
 	var difference := ball.global_position - global_position
@@ -127,6 +147,7 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float) 
 	var impulse := (target - ball.linear_velocity) * ball.mass
 	ball.touch(team, player_id, impulse, Vector3(0, -0.1, 0))
 	kick_cooldown = 0.42
+	close_control_remaining = 0.0
 	touch_cooldown = 0.3
 	match_touches += 1
 	return true
@@ -161,18 +182,21 @@ func dribble(ball: FootballBall) -> bool:
 		var contact_direction := relative.normalized() if relative.length() > 0.1 else direction
 		if stick > 0.05:
 			var angle := contact_direction.signed_angle_to(direction, Vector3.UP)
-			contact_direction = contact_direction.rotated(Vector3.UP, clampf(angle, -0.4, 0.4))
-		var foot_target := contact_direction * 0.8
-		var requested_velocity := intent.limit_length(1.0) * pace * 0.66
-		var carry_velocity := player_velocity.lerp(requested_velocity, 0.3)
-		var correction := ((foot_target - relative) * 7.0).limit_length(3.5)
+			contact_direction = contact_direction.rotated(Vector3.UP, clampf(angle, -0.65, 0.65))
+		var foot_target := contact_direction * 0.76
+		var requested_velocity := intent.limit_length(1.0) * pace * 0.66 * _turn_speed_scale(ball, player_velocity)
+		var carry_velocity := player_velocity.lerp(requested_velocity, 0.15)
+		var correction := ((foot_target - relative) * 10.0).limit_length(4.5)
 		target_velocity = carry_velocity + correction
-		impulse_limit = 0.6 * touch_skill
-		touch_cooldown = 0.055
+		impulse_limit = 0.8 * touch_skill
+		touch_cooldown = 0.045
 	var impulse := (target_velocity - ball_velocity) * ball.mass
 	if impulse.length_squared() < 0.0001:
 		return false
 	ball.touch(team, player_id, impulse.limit_length(impulse_limit))
+	if not is_sprinting:
+		close_control_ball = ball
+		close_control_remaining = 0.12
 	match_touches += 1
 	return true
 
@@ -180,6 +204,7 @@ func tackle(ball: FootballBall) -> bool:
 	if tackle_cooldown > 0.0:
 		return false
 	tackle_cooldown = 1.15
+	close_control_remaining = 0.0
 	tackle_remaining = 0.16
 	apply_central_impulse(aim * mass * 1.5)
 	if reach_ball(ball, 1.25):

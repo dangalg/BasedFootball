@@ -98,3 +98,35 @@ gameplay run. Normal play stays visible and has no automated test inputs.
 
 Delivery remains a local commit on `main`; no remote push is performed. No gameplay
 tuning or further behavioral test was performed after the passing revised session.
+
+## Tight turns update — 2026-10-11
+
+Recent ground-ball touches now briefly reduce requested carrier speed on sharp
+non-sprint turns. Faster bounded sideways impulses guide the ball around the body.
+Movement still uses capped forces; the ball remains a free rigid body. Humans and
+AI share the same handling code.
+
+Godot import and Windows game-pack export completed cleanly. Exactly one focused
+rendered sequence ran against the rebuilt executable and passed all 13 checks:
+
+- Full-stick carrying, two 90-degree turns and a 180-degree reversal moved the
+  carrier in the requested directions while keeping the ball within kicking reach.
+- Maximum carrying/turning gap was **0.9429 m**, with mean **0.7603 m**.
+- Stopping left a **0.7606 m** gap and **0.0009 m/s** horizontal ball speed.
+- Sprinting could separate the ball; the sequence reached a **9.5894 m** gap.
+- An opponent tackle took possession away, reaching a **4.0069 m** gap.
+- Airborne and out-of-reach balls received no control touches.
+- Seven rendered frames were saved; reversal and stopping frames were inspected.
+
+Results are preserved in `evidence/tight-turn-acceptance.json`,
+`tight-turn-trace.json`, `tight_turn_*.png`, and `dribble-acceptance.log`.
+The earlier passing dribble log is preserved as `dribble-passing-session.log`.
+The runtime log contained no errors. Match hardware input and AI decisions were
+disabled during the sequence, and no gamepad events were injected. Hardware feel,
+full-match AI behavior and subjective handling remain for user evaluation.
+
+The launcher requested a hidden window at `(30000, 30000)`, but Godot reported
+`(3414, 766)`. Completely off-screen rendering is therefore unverified; this run
+does not establish that the test could not appear over another application.
+No further test or gameplay tuning was performed. Delivery is local on `main`,
+with no remote push; the rebuilt game is available through the desktop shortcut.
