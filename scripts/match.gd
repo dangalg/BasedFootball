@@ -25,12 +25,14 @@ var match_count: int = 0
 var acceptance: bool = false
 var pause_requested: bool = false
 var decision_driver: Node
+var pause_states: Array[Dictionary] = []
 
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
 	var handling_acceptance := "--handling-acceptance" in OS.get_cmdline_user_args()
 	var decision_acceptance := "--decision-acceptance" in OS.get_cmdline_user_args()
-	acceptance = decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
+	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
+	acceptance = impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
 	squad.load_squad(acceptance)
 	_build_pitch()
@@ -56,7 +58,7 @@ func _ready() -> void:
 	reset_positions(0)
 	_select(0)
 	hud.flash("YOUR TEAM. YOUR GAME.", 3.0)
-	if visual_acceptance or handling_acceptance:
+	if visual_acceptance or handling_acceptance or impact_acceptance:
 		# Windowless scene validation never reads hardware input or runs a match.
 		set_physics_process(false)
 		set_process(false)
@@ -64,7 +66,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -79,7 +81,7 @@ func _ready() -> void:
 		session.begin(self)
 
 func _install_input() -> void:
-	for action in ["left", "right", "up", "down", "pass", "shoot", "lob", "through", "jockey", "tackle", "slide", "shoulder", "sprint", "switch", "pause", "confirm", "quit"]:
+	for action in ["left", "right", "up", "down", "pass", "shoot", "lob", "through", "jockey", "tackle", "slide", "shoulder", "hop", "sprint", "switch", "pause", "confirm", "quit"]:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action, 0.18)
 	var key_bindings := {"left": KEY_A, "right": KEY_D, "up": KEY_W, "down": KEY_S, "pass": KEY_SPACE, "shoot": KEY_J, "lob": KEY_U, "through": KEY_I, "jockey": KEY_CTRL, "tackle": KEY_K, "slide": KEY_L, "shoulder": KEY_H, "sprint": KEY_SHIFT, "switch": KEY_TAB, "pause": KEY_ESCAPE, "confirm": KEY_ENTER, "quit": KEY_Q}
@@ -87,12 +89,18 @@ func _install_input() -> void:
 		var key := InputEventKey.new()
 		key.physical_keycode = key_bindings[action]
 		InputMap.action_add_event(action, key)
+	var hop_key := InputEventKey.new()
+	hop_key.physical_keycode = KEY_E
+	InputMap.action_add_event("hop", hop_key)
 	# Godot's standardized south/east/west/north slots also cover PlayStation pads.
 	var buttons := {"pass": JOY_BUTTON_A, "shoot": JOY_BUTTON_B, "lob": JOY_BUTTON_X, "through": JOY_BUTTON_Y, "switch": JOY_BUTTON_LEFT_SHOULDER, "pause": JOY_BUTTON_START, "confirm": JOY_BUTTON_A, "quit": JOY_BUTTON_BACK}
 	for action in buttons:
 		var button := InputEventJoypadButton.new()
 		button.button_index = buttons[action]
 		InputMap.action_add_event(action, button)
+	var hop_button := InputEventJoypadButton.new()
+	hop_button.button_index = JOY_BUTTON_RIGHT_SHOULDER
+	InputMap.action_add_event("hop", hop_button)
 	for mapping in [["left", JOY_AXIS_LEFT_X, -1.0], ["right", JOY_AXIS_LEFT_X, 1.0], ["up", JOY_AXIS_LEFT_Y, -1.0], ["down", JOY_AXIS_LEFT_Y, 1.0], ["sprint", JOY_AXIS_TRIGGER_RIGHT, 1.0], ["jockey", JOY_AXIS_TRIGGER_LEFT, 1.0]]:
 		var axis := InputEventJoypadMotion.new()
 		axis.axis = mapping[1]
@@ -216,6 +224,7 @@ func _build_players() -> void:
 			add_child(player)
 			player.strike_contact.connect(_on_strike_contact.bind(player))
 			player.dribble_contact.connect(_on_dribble_contact.bind(player))
+			player.physical_event.connect(_on_physical_event.bind(player))
 			players.append(player)
 
 func reset_positions(kickoff_team: int) -> void:
@@ -307,7 +316,7 @@ func _physics_process(delta: float) -> void:
 	var controller_actions: Dictionary = {
 		"pass": Input.is_action_just_pressed("pass"), "through": Input.is_action_just_pressed("through"),
 		"primary": Input.is_action_just_pressed("shoot"), "primary_release": Input.is_action_just_released("shoot"),
-		"square": Input.is_action_just_pressed("lob")
+		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop")
 	}
 	if decision_driver != null:
 		controller_actions = decision_driver.actions
@@ -340,6 +349,11 @@ func _attacking_contact() -> bool:
 	return controlled.reach_ball(ball) and ball.last_touch_team in [-1, controlled.team]
 
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
+	if pressed.get("hop", false):
+		controlled.hop()
+	if controlled.ragdoll != null or controlled.hop_active:
+		charging = false
+		return
 	# Context is selected at button-down. Losing contact during a wind-up can miss.
 	if pressed.get("primary", false):
 		if _attacking_contact():
@@ -394,6 +408,9 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 
 func _on_dribble_contact(player: FootballPlayer) -> void:
 	_record("touch", player)
+
+func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
+	_record(kind, player, detail)
 
 func _control_ball() -> FootballPlayer:
 	# One nearest eligible foot per tick, with a small continuity preference.
@@ -469,20 +486,36 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") and not event.is_echo():
 		if phase == "playing":
 			phase = "paused"
+			pause_states.clear()
 			for player in players:
-				player.freeze = true
+				_pause_node(player)
+				if player.ragdoll != null:
+					_pause_node(player.ragdoll)
+					for body in player.ragdoll.bodies:
+						_pause_node(body)
 			ball.freeze = true
-			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence.\nSquare: lofted pass in attack, sliding tackle in defence.\nR2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
+			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence.\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"
-			for player in players:
-				player.freeze = false
+			for saved in pause_states:
+				var node: Node = saved.node
+				if is_instance_valid(node):
+					node.set_physics_process(saved.physics)
+					if node is RigidBody3D:
+						node.freeze = saved.freeze
+			pause_states.clear()
 			ball.freeze = false
 			hud.overlay.hide()
 	elif phase == "finished" and event.is_action_pressed("confirm"):
 		rematch()
 	elif phase != "playing" and event.is_action_pressed("quit"):
 		get_tree().quit()
+
+func _pause_node(node: Node) -> void:
+	pause_states.append({"node": node, "physics": node.is_physics_processing(), "freeze": node.freeze if node is RigidBody3D else false})
+	node.set_physics_process(false)
+	if node is RigidBody3D:
+		node.freeze = true
 
 func _process(delta: float) -> void:
 	if controlled == null:

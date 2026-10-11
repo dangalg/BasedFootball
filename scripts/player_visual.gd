@@ -10,6 +10,7 @@ var right_elbow: Node3D
 var upper_body: Node3D
 var right_boot: Node3D
 var left_boot: Node3D
+var head_pivot: Node3D
 
 func build(player: Node3D) -> void:
 	player.body_visual = Node3D.new()
@@ -25,16 +26,20 @@ func build(player: Node3D) -> void:
 	FootballArt.contact_shadow(player, 1.4)
 	FootballArt.tailored_mesh(model, [Vector3(0.88, 0.001, 0.001), Vector3(0.88, 0.17, 0.10), Vector3(1.01, 0.18, 0.11), Vector3(1.15, 0.185, 0.10), Vector3(1.33, 0.23, 0.13), Vector3(1.43, 0.245, 0.115), Vector3(1.49, 0.09, 0.07), Vector3(1.49, 0.001, 0.001)], jersey)
 	FootballArt.tailored_mesh(model, [Vector3(0.79, 0.001, 0.001), Vector3(0.79, 0.185, 0.12), Vector3(0.97, 0.18, 0.11), Vector3(0.97, 0.001, 0.001)], shorts)
-	FootballArt.cylinder(model, 0.048, 0.11, Vector3(0, 1.52, 0), skin)
+	head_pivot = Node3D.new()
+	head_pivot.name = "HeadPivot"
+	model.add_child(head_pivot)
+	head_pivot.position.y = 1.52
+	FootballArt.cylinder(head_pivot, 0.048, 0.11, Vector3.ZERO, skin)
 	FootballArt.circle(model, 0.06, Vector3(0, 1.49, 0), shorts, 0.012)
-	var head := FootballArt.sphere(model, 0.13, Vector3(0, 1.68, 0), skin)
+	var head := FootballArt.sphere(head_pivot, 0.13, Vector3(0, 0.16, 0), skin)
 	head.scale = Vector3(0.88, 1.05, 0.94)
-	var cap := FootballArt.sphere(model, 0.132, Vector3(0, 1.758, 0.014), hair)
+	var cap := FootballArt.sphere(head_pivot, 0.132, Vector3(0, 0.238, 0.014), hair)
 	cap.scale = Vector3(0.89, 0.48, 0.94)
-	FootballArt.sphere(model, 0.022, Vector3(0, 1.67, -0.121), skin).scale = Vector3(0.7, 1, 1)
+	FootballArt.sphere(head_pivot, 0.022, Vector3(0, 0.15, -0.121), skin).scale = Vector3(0.7, 1, 1)
 	for side in [-1.0, 1.0]:
-		FootballArt.sphere(model, 0.027, Vector3(side * 0.114, 1.67, 0), skin).scale = Vector3(0.6, 1, 0.8)
-		FootballArt.sphere(model, 0.009, Vector3(side * 0.04, 1.706, -0.112), hair)
+		FootballArt.sphere(head_pivot, 0.027, Vector3(side * 0.114, 0.15, 0), skin).scale = Vector3(0.6, 1, 0.8)
+		FootballArt.sphere(head_pivot, 0.009, Vector3(side * 0.04, 0.186, -0.112), hair)
 	upper_body = Node3D.new()
 	upper_body.name = "TorsoPivot"
 	upper_body.position.y = 0.88
@@ -47,27 +52,32 @@ func build(player: Node3D) -> void:
 		part.position = original_position - upper_body.position
 	for side in [-1.0, 1.0]:
 		var arm := Node3D.new()
+		arm.name = "LeftArm" if side < 0 else "RightArm"
 		upper_body.add_child(arm)
 		arm.position = Vector3(side * 0.245, 0.52, 0)
 		arm.rotation.z = side * 0.15
 		FootballArt.capsule(arm, 0.065, 0.19, Vector3(0, -0.07, 0), jersey)
 		FootballArt.capsule(arm, 0.052, 0.28, Vector3(0, -0.14, 0), skin)
 		var elbow := Node3D.new()
+		elbow.name = "LeftElbow" if side < 0 else "RightElbow"
 		arm.add_child(elbow)
 		elbow.position.y = -0.27
 		FootballArt.capsule(elbow, 0.045, 0.25, Vector3(0, -0.12, 0), skin)
 		FootballArt.sphere(elbow, 0.055, Vector3(0, -0.26, 0), skin).scale = Vector3(0.7, 1, 0.75)
 		var leg := Node3D.new()
+		leg.name = "LeftLeg" if side < 0 else "RightLeg"
 		model.add_child(leg)
 		leg.position = Vector3(side * 0.105, 0.88, 0)
 		FootballArt.capsule(leg, 0.09, 0.24, Vector3(0, -0.06, 0), shorts)
 		FootballArt.capsule(leg, 0.067, 0.39, Vector3(0, -0.21, 0), skin)
 		var knee := Node3D.new()
+		knee.name = "LeftKnee" if side < 0 else "RightKnee"
 		leg.add_child(knee)
 		knee.position.y = -0.41
 		FootballArt.capsule(knee, 0.057, 0.37, Vector3(0, -0.17, 0), socks)
 		FootballArt.cylinder(knee, 0.059, 0.03, Vector3(0, -0.06, 0), jersey)
 		var boot := Node3D.new()
+		boot.name = "Boot"
 		knee.add_child(boot)
 		boot.position = Vector3(0, -0.34, 0)
 		FootballArt.sphere(boot, 0.10, Vector3(0, 0, -0.05), boots).scale = Vector3(0.62, 0.48, 1.3)
@@ -186,6 +196,19 @@ func animate(player: Node3D, delta: float) -> void:
 			var follow := smoothstep(player.dribble_contact_time, player.dribble_duration, player.dribble_elapsed)
 			offset += player.dribble_follow_direction * 0.12 * follow + Vector3.UP * sin(follow * PI) * 0.06
 		_pose_foot(player, true, player.global_position + offset, touch_weight)
+	if player.hop_active and player.hop_elapsed > 0.08:
+		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.26, -0.12))
+		_pose_foot(player, true, player.global_position + player.body_visual.basis * Vector3(0.12, 0.30, -0.18))
+		left_arm.rotation.x = 0.45
+		right_arm.rotation.x = 0.45
+	if player.stagger_remaining > 0:
+		upper_body.rotation.z += sin(player.stagger_remaining * 14) * 0.12
+	if player.getting_up:
+		var rise := smoothstep(0, 0.85 / player.agility_skill, player.ragdoll.recovery_time)
+		player.body_visual.position.y = lerpf(-0.5, 0, rise)
+		upper_body.rotation.x = lerpf(-0.55, 0, rise)
+		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.14, 0.075, 0.10))
+		_pose_foot(player, true, player.global_position + player.body_visual.basis * Vector3(0.14, 0.075, -0.15))
 	if player.action_kind == "":
 		# Bound joint angular velocity across re-planned touches and gait changes.
 		# Kicks/challenges retain their contact poses; dribble contact checks observe

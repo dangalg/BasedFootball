@@ -40,6 +40,7 @@ Godot resource import and exported game pack.
 | `scripts/match.gd` | Match rules, court, camera, input, switching and restarts |
 | `scripts/player.gd` | Player forces, control touches, kicks and challenges |
 | `scripts/player_visual.gd` | Procedural athlete, gait and contact poses |
+| `scripts/player_ragdoll.gd` | Jointed physical falls, clearance and get-up handoff |
 | `scripts/ball.gd` | Free rigid ball, touches, rolling resistance and spin force |
 | `scripts/team_ai.gd` | Delayed teammate/opponent decisions |
 | `scripts/squad.gd` | Player definitions, bounded progression and career saves |
@@ -57,6 +58,7 @@ repository root:
 game-dev scenario run visual-scene-check --project . --output-dir evidence/game-dev --confirm --jsonl
 game-dev scenario run handling-and-tackles --project . --output-dir evidence/game-dev --confirm --allow-gpu --jsonl
 game-dev scenario run decision-match --project . --output-dir evidence/game-dev --confirm --allow-gpu --jsonl
+game-dev scenario run impacts-and-hops --project . --output-dir evidence/game-dev --confirm --allow-gpu --jsonl
 ```
 
 | Scenario | Coverage | Rendering |
@@ -64,6 +66,7 @@ game-dev scenario run decision-match --project . --output-dir evidence/game-dev 
 | `visual-scene-check` | Scene loading, assets, HUD bounds and collision configuration | Headless, CPU-only; no pixel evidence |
 | `handling-and-tackles` | 82 checks: turns, stops, sprinting, carrying cost, contact timing, challenges, misses and flight | 36 frames including walk/sprint sequences |
 | `decision-match` | 30 seconds of reactive decisions, normal match AI, an orange kickoff, physical actions and facing telemetry | Seven match frames |
+| `impacts-and-hops` | Light/hard hits, skill thresholds, early/late hops, seeded AI hop choices, pause, board recovery and restart cleanup | Fall, jump and recovery sequences |
 
 Rendered scenarios open a muted 960×600 window. Complete off-screen isolation is
 not guaranteed. Hardware input is disabled, and tests use isolated career data.

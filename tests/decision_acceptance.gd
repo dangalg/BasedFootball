@@ -21,9 +21,14 @@ var physics_finite := true
 var max_speed := 0.0
 var running_samples := [0, 0]
 var backwards_samples := [0, 0]
+var ai_intervals: Dictionary = {}
+var previous_ai_timers: Dictionary = {}
 
 func begin(match_node: Node3D) -> void:
 	game = match_node
+	for i in range(game.players.size()):
+		game.players[i].ai_rng.seed = 81011 + i
+		game.players[i].ai_style = game.players[i].ai_rng.randf_range(0.25, 0.75)
 	evidence_dir = OS.get_environment("BASED_FOOTBALL_EVIDENCE")
 	# Start with the opposing kickoff so a home-dominated opening cannot leave
 	# their possession path unexercised. Subsequent play follows normal rules.
@@ -111,6 +116,11 @@ func _physics_process(delta: float) -> void:
 	if sprinting:
 		sprint_seconds += delta
 	for player in game.players:
+		if player != game.controlled:
+			var previous: float = previous_ai_timers.get(player.player_id, 0.0)
+			if player.reaction_timer > previous + 0.01:
+				ai_intervals[snappedf(player.reaction_timer, 0.005)] = true
+			previous_ai_timers[player.player_id] = player.reaction_timer
 		physics_finite = physics_finite and player.global_position.is_finite() and player.linear_velocity.is_finite()
 		max_speed = maxf(max_speed, player.linear_velocity.length())
 		var horizontal: Vector3 = Vector3(player.linear_velocity.x, 0, player.linear_velocity.z)
@@ -147,6 +157,7 @@ func _finish() -> void:
 		"both_teams_make_physical_touches": touches[0] > 3 and touches[1] > 3,
 		"contact_timed_kicks_in_live_match": kicks > 0,
 		"sprinting_exercised": sprint_seconds > 2,
+		"AI_reaction_timing_varies": ai_intervals.size() > 5,
 		"physics_stays_finite_and_bounded": physics_finite and max_speed < 20,
 		"both_teams_face_running_motion": running_samples[0] > 100 and running_samples[1] > 100 and float(backwards_samples[0]) / running_samples[0] < 0.03 and float(backwards_samples[1]) / running_samples[1] < 0.03,
 		"live_match_frames_saved": screenshots.size() >= 7
@@ -158,6 +169,8 @@ func _finish() -> void:
 	var file := FileAccess.open(evidence_dir.path_join("scene-report.json"), FileAccess.WRITE)
 	report["running_samples"] = running_samples
 	report["backwards_running_samples"] = backwards_samples
+	report["AI_reaction_intervals"] = ai_intervals.keys()
+	report["AI_seed_base"] = 81011
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()
 	print("DECISION_SESSION_RESULT: " + JSON.stringify(report))

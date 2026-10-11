@@ -4,10 +4,26 @@ extends RefCounted
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
 static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float) -> String:
+	if player.ragdoll != null or player.hop_active:
+		return ""
 	player.reaction_timer -= delta
 	if player.reaction_timer > 0.0:
 		return ""
-	player.reaction_timer = 0.16
+	# Randomness is confined to choices, intent and timing, never hit outcomes.
+	player.reaction_timer = player.ai_rng.randf_range(0.13, 0.27) / player.agility_skill
+	player.ai_lane_offset = lerpf(player.ai_lane_offset, player.ai_rng.randf_range(-1.0, 1.0), 0.25)
+	var confidence := player.ai_rng.randf()
+	for attacker in players:
+		if attacker == player or attacker.action_kind != "slide":
+			continue
+		var relative := attacker.global_position - player.global_position
+		relative.y = 0
+		var incoming := attacker.linear_velocity - player.linear_velocity
+		var closing := incoming.dot(-relative.normalized())
+		var time_to_hit := (relative.length() - 0.6) / maxf(closing, 0.01)
+		if closing > 1.5 and time_to_hit > 0.06 and time_to_hit < player.ai_rng.randf_range(0.22, 0.40) and confidence < clampf(0.62 * player.agility_skill * player.energy, 0.25, 0.85):
+			if player.hop():
+				return "hop_attempt"
 	var attack := 1.0 if player.team == 0 else -1.0
 	var goal := Vector3(attack * 18.8, 0.28, 0)
 	var nearest: FootballPlayer = null
@@ -24,7 +40,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			teammate_holder = other
 	var target := ball.global_position
 	if nearest != player:
-		var lane := -5.0 if player.shirt_number == 7 else 5.0
+		var lane := (-5.0 if player.shirt_number == 7 else 5.0) + player.ai_lane_offset
 		if player.shirt_number == 4:
 			lane = 0.0
 		var support_x := ball.global_position.x + attack * (4.0 if teammate_holder != null else -5.0)
@@ -42,7 +58,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	direction.y = 0.0
 	player.intent = direction.normalized() if direction.length() > 0.65 else Vector3.ZERO
 	player.aim = player.intent if player.intent.length_squared() > 0.1 else Vector3(attack, 0, 0)
-	player.sprint = nearest == player and direction.length() > 4 and player.energy > 0.25
+	player.sprint = nearest == player and direction.length() > 4 and player.energy > 0.25 and confidence < 0.85
 	# Defenders use the same finite contact windows and recovery as the controller.
 	if ball.last_touch_team != player.team and ball.last_touch_team >= 0 and nearest == player:
 		for opponent in players:
@@ -51,16 +67,16 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			var separation := opponent.global_position - player.global_position
 			separation.y = 0
 			if separation.length() < 0.92 and absf(separation.normalized().dot(player.aim)) < 0.8:
-				if player.shoulder(ball):
+				if confidence < 0.75 and player.shoulder(ball):
 					return "shoulder"
 		var ball_offset := ball.global_position - player.global_position
 		ball_offset.y = 0
 		if ball_offset.length() < 1.25:
 			player.aim = ball_offset.normalized()
-			if player.tackle(ball):
+			if confidence < 0.8 and player.tackle(ball):
 				return "tackle"
 		elif ball_offset.length() < 2.6 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
-			if player.slide(ball):
+			if confidence < 0.35 + player.ai_style * 0.35 and player.slide(ball):
 				return "slide"
 	if not player.reach_ball(ball):
 		return ""
@@ -68,7 +84,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	shot_direction.y = 0
 	if absf(goal.x - player.global_position.x) < 10 and absf(player.global_position.z) < 6:
 		player.aim = shot_direction.normalized()
-		if player.kick(ball, player.aim, 17.0, 1.2, "shot"):
+		if confidence < 0.78 and player.kick(ball, player.aim.rotated(Vector3.UP, player.ai_rng.randf_range(-0.045, 0.045) / player.touch_skill), player.ai_rng.randf_range(16, 19), player.ai_rng.randf_range(1.0, 1.6), "shot"):
 			return "shot"
 	# A defender under pressure finds an advanced teammate, using the same kick.
 	var pressured := false
@@ -82,12 +98,13 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			if other == player or other.team != player.team:
 				continue
 			var advance := (other.global_position.x - player.global_position.x) * attack
+			advance += player.ai_rng.randf_range(-1.5, 1.5)
 			if advance > best:
 				best = advance
 				receiver = other
 		if receiver != null and best > 0.5:
 			var pass_direction := receiver.global_position - player.global_position
 			pass_direction.y = 0
-			if player.kick(ball, pass_direction, clampf(pass_direction.length() * 1.3, 7, 14), 0.12, "pass"):
+			if confidence < 0.85 and player.kick(ball, pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / player.touch_skill), clampf(pass_direction.length() * player.ai_rng.randf_range(1.2, 1.4), 7, 14), 0.12, "pass"):
 				return "pass"
 	return ""

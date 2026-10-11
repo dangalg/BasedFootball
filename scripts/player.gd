@@ -3,6 +3,7 @@ extends RigidBody3D
 
 signal strike_contact(kind: String)
 signal dribble_contact
+signal physical_event(kind: String, detail: Dictionary)
 
 const CONTROL_REACH := 0.95
 const FOOT_DISTANCE := 0.61
@@ -71,8 +72,22 @@ var dribble_start_foot_offset := Vector3.ZERO
 var dribble_follow_direction := Vector3.RIGHT
 var dribble_turn_side := 1.0
 var completed_dribble_contacts := 0
+var balance_skill := 1.0
+var agility_skill := 1.0
+var hop_active := false
+var hop_elapsed := 0.0
+var hop_cooldown := 0.0
+var hop_launched := false
+var ragdoll: FootballPlayerRagdoll
+var getting_up := false
+var slide_victims: Array[int] = []
+var ai_rng := RandomNumberGenerator.new()
+var ai_lane_offset := 0.0
+var ai_style := 0.5
 
 func _ready() -> void:
+	ai_rng.randomize()
+	ai_style = ai_rng.randf_range(0.25, 0.75)
 	# Movement forces must remain responsive after a player stands still.
 	can_sleep = false
 	lock_rotation = true
@@ -99,6 +114,21 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	hop_cooldown = maxf(0, hop_cooldown - delta)
+	if ragdoll != null:
+		ring.visible = selected
+		name_label.visible = selected
+		if getting_up:
+			visual_controller.animate(self, delta)
+		return
+	if hop_active:
+		hop_elapsed += delta
+		if not hop_launched and hop_elapsed >= 0.08:
+			hop_launched = true
+			apply_central_impulse(Vector3.UP * mass * (3.9 + (agility_skill - 1) * 0.5))
+		if hop_launched and hop_elapsed > 0.28 and global_position.y < 0.10 and linear_velocity.y <= 0:
+			hop_active = false
+			physical_event.emit("land", {})
 	kick_cooldown = maxf(0.0, kick_cooldown - delta)
 	tackle_cooldown = maxf(0.0, tackle_cooldown - delta)
 	touch_cooldown = maxf(0.0, touch_cooldown - delta)
@@ -129,6 +159,8 @@ func _physics_process(delta: float) -> void:
 	_update_challenge()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	if ragdoll != null:
+		return
 	var speed := pace if sprint and energy > 0.05 else pace * 0.66
 	var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
 	if stagger_remaining > 0.0:
@@ -155,9 +187,50 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		desired *= 0.3
 	var acceleration := (desired - horizontal) * 7.5
 	# The cap preserves collision response and prevents instant direction changes.
-	state.apply_central_force(acceleration.limit_length(24.0) * mass)
+	state.apply_central_force(acceleration.limit_length(24.0) * mass * (0.2 if hop_launched and hop_active else 1.0))
+
+func hop() -> bool:
+	if not upright_ready() or hop_cooldown > 0 or global_position.y > 0.12 or absf(linear_velocity.y) > 0.6:
+		return false
+	hop_active = true
+	hop_launched = false
+	hop_elapsed = 0
+	hop_cooldown = 1.15 / agility_skill
+	dribble_active = false
+	close_control_remaining = 0
+	energy = maxf(0, energy - 0.025)
+	physical_event.emit("hop", {})
+	return true
+
+func upright_ready() -> bool:
+	return ragdoll == null and not hop_active and action_kind == "" and recovery_remaining <= 0 and stagger_remaining <= 0
+
+func receive_slide(impulse: Vector3, contact: Vector3, relative_speed: float) -> void:
+	if ragdoll != null:
+		return
+	var horizontal := Vector3(linear_velocity.x, 0, linear_velocity.z)
+	var lateral := absf(impulse.normalized().dot(body_visual.global_basis.x))
+	var instability := relative_speed * (0.8 + lateral * 0.35) + horizontal.length() * 0.16
+	var resistance := 4.0 * balance_skill * lerpf(0.8, 1.0, energy) * (1.12 if jockey else 1.0)
+	close_control_remaining = 0
+	dribble_active = false
+	if instability > resistance:
+		action_kind = ""
+		hop_active = false
+		hop_launched = false
+		body_collider.shape.height = 1.65
+		body_collider.position.y = 0.86
+		ragdoll = FootballPlayerRagdoll.new()
+		get_parent().add_child(ragdoll)
+		ragdoll.begin(self, impulse, contact)
+	else:
+		apply_impulse(impulse, contact - global_position)
+		stagger_remaining = clampf(instability / resistance * 0.5, 0.10, 0.5)
+		physical_event.emit("stumble", {"impact_speed": relative_speed})
 
 func controlling_ball() -> bool:
+	if ragdoll != null or hop_active:
+		return false
 	return close_control_remaining > 0.0 and is_instance_valid(close_control_ball) and close_control_ball.last_touch_id == player_id and reach_ball(close_control_ball, CONTROL_REACH) and close_control_ball.control_block_remaining <= 0.0
 
 func _turn_speed_scale(ball: FootballBall, velocity: Vector3) -> float:
@@ -177,11 +250,15 @@ func _turn_speed_scale(ball: FootballBall, velocity: Vector3) -> float:
 	return lerpf(1.0, 0.0, smoothstep(0.45, 1.45, angle))
 
 func reach_ball(ball: FootballBall, distance: float = CONTROL_REACH) -> bool:
+	if ragdoll != null or hop_active:
+		return false
 	var difference := ball.global_position - global_position
 	difference.y = 0
 	return difference.length() < distance and ball.global_position.y < 0.75
 
 func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "") -> bool:
+	if not upright_ready():
+		return false
 	if kick_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0 or not reach_ball(ball):
 		return false
 	# Queue a short wind-up. Only the visible boot's contact window can strike.
@@ -308,6 +385,8 @@ func shoulder(ball: FootballBall) -> bool:
 	return _begin_challenge("shoulder", ball, 0.24, 0.9)
 
 func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldown: float) -> bool:
+	if not upright_ready():
+		return false
 	if tackle_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0:
 		return false
 	action_kind = kind
@@ -321,6 +400,7 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 	close_control_remaining = 0.0
 	control_stride_remaining = 0
 	tackle_remaining = duration
+	slide_victims.clear()
 	last_boot_world = visual_controller.right_boot.global_position
 	if kind == "slide":
 		body_collider.shape.height = 0.8
@@ -334,6 +414,8 @@ func _update_challenge() -> void:
 	if action_kind == "":
 		return
 	var boot_world: Vector3 = visual_controller.right_boot.global_position
+	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
+		_slide_player_contacts(boot_world)
 	if not action_has_hit and is_instance_valid(action_ball):
 		if action_kind == "kick":
 			if action_elapsed >= kick_contact_time - 0.015 and action_elapsed <= kick_contact_time + 0.045:
@@ -387,7 +469,45 @@ func _boot_distance(point: Vector3, start: Vector3, end: Vector3) -> float:
 	var t := clampf((point - start).dot(segment) / maxf(segment.length_squared(), 0.000001), 0, 1)
 	return point.distance_to(start + segment * t)
 
+func _slide_player_contacts(boot: Vector3) -> void:
+	for node in get_parent().get_children():
+		if not node is FootballPlayer or node == self or node.ragdoll != null or node.get_instance_id() in slide_victims:
+			continue
+		var other: FootballPlayer = node
+		var closest := INF
+		var contact := Vector3.ZERO
+		for foot in [other.visual_controller.left_boot, other.visual_controller.right_boot]:
+			for height in [0.0, 0.10, 0.20, 0.30]:
+				var point: Vector3 = foot.global_position + Vector3.UP * height
+				var distance := _boot_distance(point, last_boot_world, boot)
+				if distance < closest:
+					closest = distance
+					contact = point
+		if closest > 0.19:
+			continue
+		var separation := other.global_position - global_position
+		separation.y = 0
+		var direction := separation.normalized() if separation.length() > 0.01 else action_direction
+		var relative := linear_velocity - other.linear_velocity
+		var closing := maxf(0, relative.dot(direction))
+		if closing < 0.4:
+			continue
+		slide_victims.append(other.get_instance_id())
+		var effective_mass := mass * other.mass / (mass + other.mass)
+		var impulse := direction * closing * effective_mass * 0.65
+		other.receive_slide(impulse, contact, closing)
+		apply_central_impulse(-impulse)
+		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
+
 func reset_action() -> void:
+	if ragdoll != null:
+		ragdoll.finish(true)
+	getting_up = false
+	hop_active = false
+	hop_launched = false
+	hop_elapsed = 0
+	hop_cooldown = 0
+	slide_victims.clear()
 	# Restarts reset action state as well as transforms, including a lowered slide.
 	action_kind = ""
 	action_elapsed = 0

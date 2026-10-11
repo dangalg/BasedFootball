@@ -35,6 +35,8 @@ func apply_to(player: FootballPlayer, index: int) -> void:
 	var development := minf(float(player.experience) / 1200.0, 1.0)
 	player.touch_skill = float(entry["touch"]) * (1.0 + development * 0.12)
 	player.stamina_trait = float(entry["stamina"]) * (1.0 + development * 0.12)
+	player.balance_skill = float(entry.get("balance", 1.0)) * (1.0 + development * 0.06)
+	player.agility_skill = float(entry.get("agility", 1.0)) * (1.0 + development * 0.06)
 	player.mass *= 1.0 + development * 0.06
 
 func finish(players: Array[FootballPlayer]) -> String:

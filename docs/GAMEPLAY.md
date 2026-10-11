@@ -66,18 +66,38 @@ to a distant ball. Shoulder contacts exchange equal and opposite impulses betwee
 player bodies; they do not directly kick the ball or guarantee a turnover. A ball
 away from the body collision can be freed by the resulting player displacement.
 
-Animated limbs illustrate movement and supply boot-contact positions. They are
-not independent limb colliders; the shared body capsule supplies player collision.
+During upright play, animated limbs illustrate movement and supply boot-contact
+positions; the shared body capsule supplies collision. A slide's swept boot can
+contact another player's lower legs. Relative closing speed, direction, movement,
+balance, stamina and jockey stance determine whether upright balance is lost.
+
+A light hit produces a stumble and interrupts close control. A stronger hit hands
+the athlete to 11 joined rigid body parts, inheriting momentum and receiving the
+impact. The ordinary capsule is disabled during the fall. Once the body settles,
+the player blends through a get-up pose at a nearby clear standing position.
+Getting up is an authored blend, not a fully muscular physics simulation. Fallen
+players cannot control the ball, kick, tackle or jump; you can switch teammates.
+
+Press **R1 / E** for a timed hop. After a short preparation, an upward impulse lifts
+the real collision body. Reduced air steering, gravity, leg clearance and landing
+determine the result. A late attempt can be hit before clearing the tackle. The
+ball stays free, and repeated hops have a cooldown and stamina cost.
 
 ## AI and progression
 
-AI players have a decision delay and use the same movement, kick and challenge
-functions as the human-controlled player. There are no score-driven boosts or
-future controller inputs available to the AI.
+AI players use the same movement, kick, hop and challenge functions as the
+human-controlled player. Reaction intervals, support positioning, sprint/challenge
+choices, pass receivers and kick direction/power vary within bounds. AI hop
+attempts depend on the visible incoming slide and player agility/stamina.
+Randomness changes decisions and execution attempts, never physical hit or fall
+outcomes. There are no score-driven boosts or future controller inputs available
+to the AI. Tests seed each player's random generator for repeatable choices.
 
 Home players retain their identity and earn XP for participation in completed
 matches. At 1,200 XP, development reaches its current caps: +12% touch, +12%
-stamina and +6% mass for balance. Pace does not grow. Normal career data is stored
+stamina and +6% mass for balance. Explicit balance and agility traits also develop
+by up to 6%, affecting marginal-hit resistance, hop cooldown and recovery. Pace does
+not grow. Normal career data is stored
 locally; test scenarios use isolated career data.
 
 This prototype is still being tuned. These rules describe the implementation,

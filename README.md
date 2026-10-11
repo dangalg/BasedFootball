@@ -31,7 +31,7 @@ A well-timed tackle can take the ball; a missed one leaves you recovering.
 
 The aim is responsive football with visible weight, fair rules and lasting player
 identity. Humans and AI use the same movement and kick functions. The AI has a
-fixed decision delay, without score-based boosts or future controller inputs.
+bounded, varied reaction timing, without score-based boosts or future controller inputs.
 
 | On the pitch | In your squad |
 | --- | --- |
@@ -80,6 +80,7 @@ attacking and defending according to nearby possession.
 | Lofted pass / sliding tackle | Square **□** in attack / defence | U / L |
 | Through pass | Triangle **△** | I |
 | Shield / jockey | L2 | Ctrl |
+| Timed hop over a slide | R1 | E |
 | Sprint | R2 | Shift |
 | Switch teammate | L1 | Tab |
 | Directional teammate selection | Right stick flick | — |
@@ -89,6 +90,8 @@ attacking and defending according to nearby possession.
 
 **First-touch tips:** use smaller stick movements to stay close to the ball,
 release the stick to settle it, and allow a braking step on sharp turns.
+R1 gives a short physical hop: press before the slide reaches your legs. A late
+jump can still be tripped, and the ball stays free while you are airborne.
 The gold line shows your aim. Shoulder challenges need side contact with an
 opponent; they do not guarantee a turnover.
 
@@ -111,13 +114,19 @@ Saves live at:
 
 The current build includes physical handling, three tackle types, contact-timed
 kicks, AI matches, switching, local progression and original procedural court,
-athlete and sound assets. Multiplayer, keepers and full ragdolls are not implemented.
+athlete and sound assets. Strong slide contacts can produce jointed physical falls;
+lighter contacts cause stumbles. Players recover through a blended get-up sequence.
+AI choices, reaction timing and kick aim vary; physical impact outcomes use no
+random rolls. Multiplayer and keepers are not implemented.
 Animation, controller feel and match balance are still being refined.
 
 Recorded checks cover production physics, contact timing, turns, sprinting,
 tackles and running direction. Rendered captures are inspected; controller
 hardware and subjective feel still need human playtesting. See the
 [verification record](VERIFICATION.md) for results, failed iterations and limits.
+
+The local realism update passed **22 impact/jump checks**, **82 handling checks**
+and **11 live AI checks**, including a physical fall and recovery during the match.
 
 ## Explore the project
 

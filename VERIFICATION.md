@@ -211,3 +211,56 @@ are excluded from Godot import with `docs/.gdignore`. GitHub source publication
 was subsequently authorized by the user; earlier local-only delivery notes above
 describe their historical milestones. Generated playable builds and raw evidence
 remain local.
+
+## Local physical falls, timed hops and varied AI - 2026-10-11
+
+The user approved slide-induced ragdolls, R1 hops and bounded AI decision randomness.
+The upright controller is retained. Swept slide-boot/lower-leg contact measures
+closing speed and direction; movement, balance, energy and jockey stance determine
+whether the hit produces a stumble or loses upright balance. Impact classification
+does not sample randomness. A fall transfers the visible athlete and momentum to
+11 joined rigid bodies, with the normal capsule disabled. Once the body settles,
+clearance is checked and a get-up animation blends back to upright play. Get-up
+uses an authored blend, not a fully physical muscular recovery controller.
+
+R1 / E schedules an 80 ms preparation followed by an upward impulse. The real
+collision body rises and lands under gravity, with reduced air steering, a cooldown
+and a small stamina cost. Airborne/fallen players cannot supply close-control
+touches or other actions. AI timing, positioning, sprint/challenge choices, pass
+receivers and kick execution vary within bounds; tests seed the individual RNGs.
+
+Development failures were preserved: the initial impact harness had an untyped
+capture filename parse error; a subsequent run exposed renamed duplicate limbs
+and an incomplete ragdoll. Explicit node names fixed the handoff, and spreading
+the physical impact across pelvis, torso and struck shin avoids excessive torque.
+A later run passed gameplay checks but failed the capture schema because AI frame
+labels contained uppercase characters; the wrapper now normalizes labels.
+
+Final recorded runs:
+
+| Scenario | Checks | Evidence run |
+| --- | --- | --- |
+| Physical impacts and hops | 22/22 | `run_1791748133679_34046d063d8d4d8f8e00b2147fcc6f27` |
+| Existing handling and challenges | 82/82 | `run_1791748014473_37e6cafbf06d498fb704674dbfd9cb00` |
+| Reactive decisions against varied AI | 11/11 | `run_1791748195933_b17a248cd96f4898bfd9f8d69580e582` |
+
+Impact coverage includes light stumbles, actual slide trips, early clearance and
+late-hop trips, the same marginal impact at low/high balance, an AI-requested hop,
+pause/resume, board recovery, restart cleanup and blocked actions while fallen.
+The skill-threshold cases apply the same impulse directly to the production
+response; real slide-to-leg detection is exercised separately. The AI hop case
+samples 24 seeded choices in the same threat state, then physically runs one
+successful choice; those probes are not 24 separate played collisions.
+Fifty-one frames were saved. Fall, hop, recovery and restored-standing frames were
+inspected. Maximum ragdoll-part speed was 8.202 m/s and all positions stayed finite.
+
+The 30-second live session ended 1-1, with 21 blue and 18 orange dribble contacts,
+five completed kicks, 17 AI actions and 37 distinct sampled AI reaction intervals.
+An opponent physically fell at 2.13 seconds and got up at 4.33 seconds. The session
+kept normal AI, rules and physics active with isolated career data and no hardware
+input. All final processes exited successfully without runtime errors. Sealed
+capture verification checked the final artifact rosters and hashes.
+
+Physical controller feel, longer match balance and recovery in every possible
+crowd arrangement remain human-playtest work. The rebuilt desktop executable is
+ready. This update is committed locally; it has not been pushed to GitHub.

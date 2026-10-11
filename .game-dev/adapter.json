@@ -15,7 +15,10 @@
         "workingDirectory": "."
       },
       "timeoutSeconds": 30,
-      "capabilities": ["cpu", "project-write"],
+      "capabilities": [
+        "cpu",
+        "project-write"
+      ],
       "parameters": {},
       "outputs": {
         "format": "game-dev-capture-v1",
@@ -29,11 +32,18 @@
       "command": {
         "executable": "tools/visual_scene_check.mjs",
         "runtime": "node",
-        "arguments": ["rendered"],
+        "arguments": [
+          "rendered"
+        ],
         "workingDirectory": "."
       },
       "timeoutSeconds": 60,
-      "capabilities": ["cpu", "project-write", "gpu", "opengl"],
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
       "parameters": {},
       "outputs": {
         "format": "game-dev-capture-v1",
@@ -47,13 +57,48 @@
       "command": {
         "executable": "tools/visual_scene_check.mjs",
         "runtime": "node",
-        "arguments": ["decisions"],
+        "arguments": [
+          "decisions"
+        ],
         "workingDirectory": "."
       },
       "timeoutSeconds": 60,
-      "capabilities": ["cpu", "project-write", "gpu", "opengl"],
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
       "parameters": {},
-      "outputs": {"format": "game-dev-capture-v1", "path": "staging/capture.json"}
+      "outputs": {
+        "format": "game-dev-capture-v1",
+        "path": "staging/capture.json"
+      }
+    },
+    {
+      "id": "impacts-and-hops",
+      "title": "Physical falls, hop clearance and recovery",
+      "description": "Finite rendered contact scenarios, skill thresholds, R1 hops, board recovery and restart cleanup.",
+      "command": {
+        "arguments": [
+          "impacts"
+        ],
+        "runtime": "node",
+        "workingDirectory": ".",
+        "executable": "tools/visual_scene_check.mjs"
+      },
+      "timeoutSeconds": 60,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }
