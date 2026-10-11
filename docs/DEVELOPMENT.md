@@ -1,0 +1,105 @@
+# Development guide
+
+[← Back to the README](../README.md)
+
+## Engine and build
+
+The project targets **Godot 4.6.1 Mono on Windows**, with GDScript gameplay,
+built-in Jolt physics at **120 Hz**, physics interpolation and the OpenGL
+Compatibility renderer. No external asset download is needed to load the game.
+
+`Launch.ps1` defaults to the original development machine's Godot installation.
+Set `GODOT_EXE` to your installed **console executable** on another machine:
+
+```powershell
+$env:GODOT_EXE = 'C:\path\to\Godot_v4.6.1-stable_mono_win64_console.exe'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Launch.ps1 -Build
+```
+
+The script imports the project, checks import/export logs, exports the Windows
+game pack, and copies the matching graphical engine and `GodotSharp` runtime
+into `build/`. It creates a local playable bundle rather than a compact
+export-template distribution. Keep the bundle together when moving it.
+
+Open the editor with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Launch.ps1 -Editor
+```
+
+Double-click `Play.cmd` to launch. Without a built executable it opens the project
+using the configured engine. Generated builds, Godot caches and raw test evidence
+are excluded from Git. `docs/.gdignore` keeps documentation screenshots out of the
+Godot resource import and exported game pack.
+
+## Project map
+
+| Path | Responsibility |
+| --- | --- |
+| `scenes/match.tscn` | Main scene |
+| `scripts/match.gd` | Match rules, court, camera, input, switching and restarts |
+| `scripts/player.gd` | Player forces, control touches, kicks and challenges |
+| `scripts/player_visual.gd` | Procedural athlete, gait and contact poses |
+| `scripts/ball.gd` | Free rigid ball, touches, rolling resistance and spin force |
+| `scripts/team_ai.gd` | Delayed teammate/opponent decisions |
+| `scripts/squad.gd` | Player definitions, bounded progression and career saves |
+| `scripts/hud.gd`, `scripts/art.gd`, `scripts/sound.gd` | HUD, original visual helpers and procedural sound |
+| `data/squad.json` | Starting player identities and attributes |
+| `tests/` | Scene, handling and reactive decision fixtures |
+| `.game-dev/adapter.json` | Local game-dev scenario definitions |
+
+## Current verification scenarios
+
+Build first. With the separately installed `game-dev` CLI available, run from the
+repository root:
+
+```powershell
+game-dev scenario run visual-scene-check --project . --output-dir evidence/game-dev --confirm --jsonl
+game-dev scenario run handling-and-tackles --project . --output-dir evidence/game-dev --confirm --allow-gpu --jsonl
+game-dev scenario run decision-match --project . --output-dir evidence/game-dev --confirm --allow-gpu --jsonl
+```
+
+| Scenario | Coverage | Rendering |
+| --- | --- | --- |
+| `visual-scene-check` | Scene loading, assets, HUD bounds and collision configuration | Headless, CPU-only; no pixel evidence |
+| `handling-and-tackles` | 82 checks: turns, stops, sprinting, carrying cost, contact timing, challenges, misses and flight | 36 frames including walk/sprint sequences |
+| `decision-match` | 30 seconds of reactive decisions, normal match AI, an orange kickoff, physical actions and facing telemetry | Seven match frames |
+
+Rendered scenarios open a muted 960×600 window. Complete off-screen isolation is
+not guaranteed. Hardware input is disabled, and tests use isolated career data.
+The decision fixture chooses actions from current state through production
+controller actions; it does not validate a physical PlayStation controller.
+
+Inspect the report and logs inside the emitted run directory. Verify the sealed
+artifact roster with:
+
+```powershell
+game-dev capture verify 'PATH_TO_RUN_DIRECTORY' --json
+```
+
+Game-dev proves process status, decoded raster bytes and sealed artifact hashes.
+It does not independently prove GPU completion, hardware performance or subjective
+quality. Read [VERIFICATION.md](../VERIFICATION.md) for recorded results and limits.
+
+The adapter wrapper currently pins the original developer's Godot path and restores
+Windows user-data paths. On another machine, update the engine path in
+`tools/visual_scene_check.mjs` to match your installation. The regular build and
+play launcher uses `GODOT_EXE` instead.
+
+`-Acceptance` and `-DribbleAcceptance` remain historical launch modes. Their old
+thresholds have not been revalidated for the current 22 cm ball and timed contacts;
+use the game-dev scenarios for current verification.
+
+## Original asset tools
+
+The checked-in textures and branding are ready to use. Regeneration is optional
+and needs Python with Pillow:
+
+```powershell
+python tools/make_court_textures.py
+python tools/make_icon.py
+```
+
+Court textures live in `assets/court/`. Branding includes SVG, PNG and a seven-size
+Windows ICO in `assets/branding/`. Athlete meshes and game sounds are generated
+by project code. Documentation images are actual recorded prototype captures.
