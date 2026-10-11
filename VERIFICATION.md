@@ -130,3 +130,14 @@ The launcher requested a hidden window at `(30000, 30000)`, but Godot reported
 does not establish that the test could not appear over another application.
 No further test or gameplay tuning was performed. Delivery is local on `main`,
 with no remote push; the rebuilt game is available through the desktop shortcut.
+
+## Desktop icon — 2026-10-11
+
+Created a dark rounded-square icon with a turquoise pitch and a high-contrast
+football. `tools/make_icon.py` builds SVG, PNG and ICO artwork; no game build is
+needed because only the desktop shortcut's icon reference changes. One focused
+setup check parsed the SVG and decoded the PNG and all seven ICO sizes
+(16, 24, 32, 48, 64, 128, 256). The PNG preview was inspected. Shortcut readback
+confirmed the new ICO path, unchanged playable target and empty arguments.
+The game was not launched. Windows desktop icon-cache refresh remains unverified.
+The intended source/artwork files are committed locally on `main`, without push.

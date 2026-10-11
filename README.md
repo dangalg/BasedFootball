@@ -1,5 +1,10 @@
 # Based Football
 
+Desktop artwork is in `assets/branding/based-football.ico` (seven Windows icon
+sizes), with PNG preview and SVG source alongside it. `tools/make_icon.py`
+rebuilds these files with Python and Pillow. The desktop shortcut uses this ICO
+while continuing to launch `build/BasedFootball.exe` without test arguments.
+
 Local 3v3 football, an angled camera, a physical ball, responsive weighted players,
 small goals and rebound boards. Built for Godot **4.6.1**, using built-in Jolt.
 

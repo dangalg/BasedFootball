@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<rect x="8" y="8" width="240" height="240" rx="52" fill="#122633"/>
+<rect x="27" y="29" width="202" height="198" rx="24" fill="#39e4bc"/>
+<g fill="none" stroke="#122633" stroke-width="5" opacity=".45">
+<path d="M 128,29 V 227"/><circle cx="128" cy="128" r="42"/>
+<path d="M 27,88 H 52 V 168 H 27 M 229,88 H 204 V 168 H 229"/></g>
+<ellipse cx="133" cy="193" rx="65" ry="15" fill="#122633" opacity=".28"/>
+<circle cx="128" cy="122" r="76" fill="#122633"/>
+<circle cx="128" cy="122" r="70" fill="#f5faf8"/>
+<defs><clipPath id="ball"><circle cx="128" cy="122" r="70"/></clipPath></defs>
+<g clip-path="url(#ball)" fill="#122633"><polygon points="128.00,99.00 149.87,114.89 141.52,140.61 114.48,140.61 106.13,114.89"/>
+<polygon points="128.00,37.00 148.92,52.20 140.93,76.80 115.07,76.80 107.08,52.20"/>
+<polygon points="208.84,95.73 200.85,120.33 174.99,120.33 166.99,95.73 187.92,80.53"/>
+<polygon points="177.96,190.77 152.10,190.77 144.11,166.17 165.03,150.97 185.95,166.17"/>
+<polygon points="78.04,190.77 70.05,166.17 90.97,150.97 111.89,166.17 103.90,190.77"/>
+<polygon points="47.16,95.73 68.08,80.53 89.01,95.73 81.01,120.33 55.15,120.33"/></g>
+<g clip-path="url(#ball)" fill="none" stroke="#122633" stroke-width="3"><path d="M 128.00,99.00 L 128.00,59.00"/>
+<path d="M 149.87,114.89 L 187.92,102.53"/>
+<path d="M 141.52,140.61 L 165.03,172.97"/>
+<path d="M 114.48,140.61 L 90.97,172.97"/>
+<path d="M 106.13,114.89 L 68.08,102.53"/></g>
+<circle cx="105" cy="83" r="8" fill="white" opacity=".6"/>
+</svg>
