@@ -191,3 +191,23 @@ Tests disable hardware input and do not overwrite normal career data. These are
 rendered production-physics checks plus a short reactive decision session, not
 hardware-controller validation, balance testing, subjective feel or a GPU benchmark.
 The rebuilt local executable is available through the desktop shortcut. No push.
+
+## Forward elbow bend and documentation captures - 2026-10-11
+
+The user identified backwards forearms in the athlete screenshots. The elbow
+flexion sign was incorrect for the model's local -Z forward direction. Both elbow
+angles now bend the forearms forward; shoulder gait and physical contact code are
+unchanged.
+
+The rebuilt pack passed all 82 handling checks in
+`run_1791746745699_777ac48b1807407c9d064c36f445d129`, saving 36 rendered frames.
+Idle athlete and sprint frames were inspected for the corrected bend. Capture
+verification passed with closed artifact hashes; no runtime errors were reported.
+The earlier 10/10 live decision result remains historical; that scenario was not
+repeated for this isolated elbow change.
+
+The README uses two unedited frames from this corrected run. Documentation images
+are excluded from Godot import with `docs/.gdignore`. GitHub source publication
+was subsequently authorized by the user; earlier local-only delivery notes above
+describe their historical milestones. Generated playable builds and raw evidence
+remain local.

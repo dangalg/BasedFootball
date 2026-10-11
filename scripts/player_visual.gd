@@ -151,8 +151,10 @@ func animate(player: Node3D, delta: float) -> void:
 	right_boot.rotation = Vector3.ZERO
 	left_arm.rotation.x = -0.5 if sliding else -left_swing * 0.7
 	right_arm.rotation.x = -0.5 if sliding else -right_swing * 0.7
-	left_elbow.rotation.x = -0.6 - stride * 0.3
-	right_elbow.rotation.x = -0.6 - stride * 0.3
+	# The athlete faces local -Z. Positive X flexion bends the forearms forward;
+	# a negative angle bent both elbows towards the back of the torso.
+	left_elbow.rotation.x = 0.6 + stride * 0.3
+	right_elbow.rotation.x = 0.6 + stride * 0.3
 	if kicking or standing or rising:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
 	elif touching:
