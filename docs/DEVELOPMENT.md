@@ -150,3 +150,7 @@ each athlete, turning/stopping control and absence of remote ball touches.
 The previous failed below-ground-foot evidence is retained separately.
 
 Verified local movement checkpoint: run_1791827288363_1191765ce15640dda94a0015edff488b passed 429/429 checks and saved 192 frames. Build clean; sealed capture hashes verified. Preparation uses planted ankle geometry, retaining the 80 ms physical launch. Controller feel remains human evaluation.
+
+The teamplay scenario checks side/end/corner recovery, goal-side switching, ground and lofted physical reception, missed pass assignment, pressure response and a bounded autonomous sequence. Rendered runs request an off-screen window.
+
+Verified teamplay checkpoint: run_1791827595948_0fb7c13f7c8742f5a4d2531c63cf4d09 passed all 34 checks; clean build and verified sealed hashes. Wall/corner recovery and physical ground/lob receiving succeeded in the bounded fixtures. Full-match balance and controller feel remain unverified.

@@ -74,6 +74,8 @@ var team_role := ""
 var team_target := Vector3.ZERO
 var run_requested := 0.0
 var support_requested := 0.0
+var incoming_pass_from := ""
+var incoming_pass_remaining := 0.0
 var last_boot_world := Vector3.ZERO
 var completed_kicks: int = 0
 var last_kick_contact_distance: float = 0.0
@@ -139,6 +141,7 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	incoming_pass_remaining = maxf(0, incoming_pass_remaining - delta)
 	hop_landing_remaining = maxf(0, hop_landing_remaining - delta)
 	run_requested = maxf(0, run_requested - delta)
 	support_requested = maxf(0, support_requested - delta)
@@ -378,7 +381,8 @@ func can_control(ball: FootballBall) -> bool:
 	if ball.global_position.y > 0.4:
 		return false
 	var relative_velocity := Vector3(ball.linear_velocity.x - linear_velocity.x, 0, ball.linear_velocity.z - linear_velocity.z)
-	return relative_velocity.length() <= 6.2
+	# Receiving allows a faster cushioning contact, still through the swept boot.
+	return relative_velocity.length() <= (12.0 if incoming_pass_remaining > 0 else 6.2)
 
 func dribble(ball: FootballBall) -> bool:
 	if touch_cooldown > 0.0 or not can_control(ball):
@@ -617,6 +621,8 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	incoming_pass_from = ""
+	incoming_pass_remaining = 0
 	hop_landing_remaining = 0
 	shot_preparation = 0
 	if ragdoll != null:

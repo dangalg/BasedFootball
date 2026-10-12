@@ -14,7 +14,8 @@ const athletes = process.argv[2] === 'athletes';
 const skinnedShot = process.argv[2] === 'skinned-shot';
 const shotsTeam = process.argv[2] === 'shots-team';
 const humanMotion = process.argv[2] === 'human-motion';
-const rendered = humanMotion || shotsTeam || skinnedShot || athletes || impacts || decisionMatch || process.argv[2] === 'rendered';
+const teamplay = process.argv[2] === 'teamplay';
+const rendered = teamplay || humanMotion || shotsTeam || skinnedShot || athletes || impacts || decisionMatch || process.argv[2] === 'rendered';
 const runDir = process.env.GAME_DEV_RUN_DIR;
 if (!runDir || !process.env.GAME_DEV_RUN_ID) throw new Error('Run through the game-dev scenario harness.');
 await access(engine);
@@ -25,9 +26,9 @@ await mkdir(staging, { recursive: true });
 // resolver requires APPDATA; restore only the current user's known app-data roots.
 const userHome = homedir();
 const result = await new Promise((resolve, reject) => {
-  const displayArgs = rendered ? ['--windowed', '--resolution', '960x600', '--audio-driver', 'Dummy'] : ['--headless'];
+  const displayArgs = rendered ? ['--windowed', '--position', '30000,30000', '--resolution', '960x600', '--audio-driver', 'Dummy'] : ['--headless'];
   const child = spawn(engine, [...displayArgs, '--path', path.join(project, 'build'),
-    '--main-pack', pack, '--log-file', path.join(staging, 'godot.log'), '--', humanMotion ? '--human-motion-acceptance' : shotsTeam ? '--shots-team-acceptance' : skinnedShot ? '--skinned-shot-acceptance' : athletes ? '--athlete-acceptance' : impacts ? '--impact-acceptance' : decisionMatch ? '--decision-acceptance' : rendered ? '--handling-acceptance' : '--visual-acceptance'], {
+    '--main-pack', pack, '--log-file', path.join(staging, 'godot.log'), '--', teamplay ? '--teamplay-acceptance' : humanMotion ? '--human-motion-acceptance' : shotsTeam ? '--shots-team-acceptance' : skinnedShot ? '--skinned-shot-acceptance' : athletes ? '--athlete-acceptance' : impacts ? '--impact-acceptance' : decisionMatch ? '--decision-acceptance' : rendered ? '--handling-acceptance' : '--visual-acceptance'], {
     cwd: project, windowsHide: true,
     env: { ...process.env, APPDATA: path.join(userHome, 'AppData', 'Roaming'),
       LOCALAPPDATA: path.join(userHome, 'AppData', 'Local'), BASED_FOOTBALL_EVIDENCE: staging },

@@ -177,3 +177,6 @@ contact window. Inside/outside cuts orient the boot; stopping can raise the sole
 over the ball for a trap. The selected boot supplies the swept contact check.
 Foot endpoints are blended before leg IK, with a ground-height constraint,
 rather than independently interpolating joints through below-ground arcs.
+
+## Active team play
+Automatic defensive switching prefers available goal-side cover. Manual right-stick switching retains direction selection. Pursuers reach legal board positions and attempt physical escape kicks. Successful passes assign a receiver to intercept the current trajectory; assignment expires or ends on another touch. Receiving uses a wider cushioning speed window but requires boot contact. Pressure near the home goal can prompt a clearance. No ball homing or score-dependent outcomes.

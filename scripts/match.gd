@@ -36,7 +36,8 @@ func _ready() -> void:
 	var skinned_shot_acceptance := "--skinned-shot-acceptance" in OS.get_cmdline_user_args()
 	var shots_team_acceptance := "--shots-team-acceptance" in OS.get_cmdline_user_args()
 	var human_motion_acceptance := "--human-motion-acceptance" in OS.get_cmdline_user_args()
-	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance
+	var teamplay_acceptance := "--teamplay-acceptance" in OS.get_cmdline_user_args()
+	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance or teamplay_acceptance
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
@@ -74,7 +75,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -286,10 +287,27 @@ func _select(index: int) -> void:
 func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 	var best := -INF
 	var winner := selected_index
+	var carrier: FootballPlayer = null
+	var nearest := INF
+	for opponent in players:
+		if opponent.team != controlled.team and opponent.upright_ready() and opponent.reach_ball(ball, 1.4):
+			var distance := opponent.global_position.distance_to(ball.global_position)
+			if distance < nearest:
+				nearest = distance
+				carrier = opponent
+	var own_goal := Vector3(-18 if controlled.team == 0 else 18, 0, 0)
 	for i in range(3):
-		if i == selected_index:
+		if i == selected_index or not players[i].upright_ready():
 			continue
 		var value := -players[i].global_position.distance_to(ball.global_position)
+		if carrier != null:
+			var segment := own_goal - carrier.global_position
+			segment.y = 0
+			var offset := players[i].global_position - carrier.global_position
+			offset.y = 0
+			var along := offset.dot(segment) / maxf(segment.length_squared(), 0.001)
+			var lateral := (offset - segment * clampf(along, 0, 1)).length()
+			value = (20.0 if along > 0 and along < 1 else 0.0) - lateral * 4 - offset.length() * 0.25
 		if direction.length_squared() > 0.1:
 			var offset := players[i].global_position - controlled.global_position
 			offset.y = 0
@@ -458,8 +476,35 @@ func _pass_distance(direction: Vector3) -> float:
 	return clampf(distance, 6, 20)
 
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
+	# Missed swings emit no contact and therefore create no receiving assignment.
+	for teammate in players:
+		teammate.incoming_pass_remaining = 0
+	if kind in ["pass", "through", "lob"]:
+		var receiver := _pass_receiver(player, player.action_direction)
+		if receiver != null:
+			receiver.incoming_pass_from = player.player_id
+			receiver.incoming_pass_remaining = 3.5
+			receiver.reaction_timer = 0
 	_record(kind, player, {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance})
 	sound.play_event("kick")
+
+func _pass_receiver(passer: FootballPlayer, direction: Vector3) -> FootballPlayer:
+	var receiver: FootballPlayer = null
+	var best := -INF
+	for teammate in players:
+		if teammate == passer or teammate.team != passer.team or not teammate.upright_ready():
+			continue
+		var offset := teammate.global_position - ball.global_position
+		offset.y = 0
+		var along := offset.dot(direction)
+		var lateral := (offset - direction * along).length()
+		if along < 0.4 or lateral > maxf(2.5, along * 0.65):
+			continue
+		var score := -lateral * 3 - along * 0.08
+		if score > best:
+			best = score
+			receiver = teammate
+	return receiver
 
 func _on_dribble_contact(player: FootballPlayer) -> void:
 	_record("touch", player)
