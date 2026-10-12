@@ -74,11 +74,11 @@ attacking and defending according to nearby possession.
 | Action | PlayStation | Keyboard |
 | --- | --- | --- |
 | Move and aim | Left stick | WASD |
-| Ground pass | Cross **✕** | Space |
+| Ground pass (hold/release for power) | Cross **✕** | Space |
 | Charge and release shot | Circle **○** in attack | J |
 | Standing tackle / side-contact shoulder | Circle **○** in defence | K / H |
-| Lofted pass / sliding tackle | Square **□** in attack / defence | U / L |
-| Through pass | Triangle **△** | I |
+| Lofted pass / sliding tackle | Hold/release Square **□** in attack; press in defence | U / L |
+| Through pass (hold/release for power) | Triangle **△** | I |
 | Shield / jockey | L2 | Ctrl |
 | Timed hop over a slide | R3 | E |
 | Sprint | R2 | Shift |

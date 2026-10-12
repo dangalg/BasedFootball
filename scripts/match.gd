@@ -17,6 +17,10 @@ var kickoff_remaining: float = 1.5
 var phase: String = "playing"
 var charge: float = 0.0
 var charging: bool = false
+var delivery_kind := ""
+var delivery_charge := 0.0
+var delivery_high := false
+var vibration_intensity := 0.6
 var right_stick_latched: bool = false
 var camera_focus := Vector3.ZERO
 var aim_line: MeshInstance3D
@@ -39,6 +43,8 @@ func _ready() -> void:
 	var teamplay_acceptance := "--teamplay-acceptance" in OS.get_cmdline_user_args()
 	var contact_play_acceptance := "--contact-play-acceptance" in OS.get_cmdline_user_args()
 	var core_handling_acceptance := "--core-handling-acceptance" in OS.get_cmdline_user_args()
+	var core_striking_acceptance := "--core-striking-acceptance" in OS.get_cmdline_user_args()
+	core_handling_acceptance = core_handling_acceptance or core_striking_acceptance
 	contact_play_acceptance = contact_play_acceptance or core_handling_acceptance
 	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance or teamplay_acceptance or contact_play_acceptance
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
@@ -78,7 +84,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/core_handling_acceptance.gd" if core_handling_acceptance else "res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/core_striking_acceptance.gd" if core_striking_acceptance else "res://tests/core_handling_acceptance.gd" if core_handling_acceptance else "res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -275,8 +281,12 @@ func reset_positions(kickoff_team: int) -> void:
 	kickoff_remaining = 1.5
 	charging = false
 	charge = 0.0
+	delivery_kind = ""
+	delivery_charge = 0
 
 func _select(index: int) -> void:
+	delivery_kind = ""
+	delivery_charge = 0
 	if controlled != null:
 		controlled.jockey = false
 		controlled.shot_preparation = 0
@@ -353,6 +363,9 @@ func _physics_process(delta: float) -> void:
 		"pass": Input.is_action_just_pressed("pass"), "through": Input.is_action_just_pressed("through"),
 		"primary": Input.is_action_just_pressed("shoot"), "primary_release": Input.is_action_just_released("shoot"),
 		"primary_held": Input.is_action_pressed("shoot"),
+		"pass_held": Input.is_action_pressed("pass"), "pass_release": Input.is_action_just_released("pass"),
+		"through_held": Input.is_action_pressed("through"), "through_release": Input.is_action_just_released("through"),
+		"square_held": Input.is_action_pressed("lob"), "square_release": Input.is_action_just_released("lob"),
 		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop"),
 		"l1": Input.is_action_pressed("switch"), "r1": Input.is_action_pressed("modifier_r1"), "l2": controlled.jockey,
 		"run": Input.is_action_just_pressed("switch"), "support": Input.is_action_just_pressed("modifier_r1")
@@ -392,6 +405,17 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if controlled.action_kind == "grab":
 		controlled.grab_held = pressed.get("primary_held", false) and pressed.get("l2", false)
 	var shot_direction := controlled.intent.normalized() if controlled.intent.length() > 0.2 else controlled.aim
+	for button in ["pass", "through", "square"]:
+		if pressed.get(button, false) and (_attacking_contact() or controlled.incoming_pass_remaining > 0) and not charging:
+			delivery_kind = button
+			delivery_charge = 0
+			delivery_high = pressed.get("l1", false)
+	if delivery_kind != "":
+		delivery_charge = minf(1, delivery_charge + delta / 0.65)
+		if pressed.get(delivery_kind + "_release", false):
+			_release_delivery(shot_direction, delivery_kind, delivery_charge, delivery_high)
+			delivery_kind = ""
+			delivery_charge = 0
 	if _attacking_contact() and (pressed.get("run", false) or pressed.get("support", false)) and not pressed.get("primary", false) and not charging:
 		var candidate: FootballPlayer = null
 		var closest := INF
@@ -408,6 +432,7 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		controlled.hop()
 	if controlled.ragdoll != null or controlled.hop_active:
 		charging = false
+		delivery_kind = ""
 		return
 	# Context is selected at button-down. Losing contact during a wind-up can miss.
 	if pressed.get("primary", false):
@@ -434,8 +459,8 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			if kind == "chip":
 				controlled.loft(ball, shot_direction, lerpf(5, 15, charge), false, kind)
 			else:
-				var strength := lerpf(16, 30, charge) if kind == "power" else lerpf(10, 19, charge) if kind in ["finesse", "outside"] else lerpf(12, 23, charge)
-				var lift := lerpf(0.7, 3.2, charge)
+				var strength := lerpf(22, 34, charge) if kind == "power" else lerpf(13, 23, charge) if kind in ["finesse", "outside"] else lerpf(14, 27, charge)
+				var lift := lerpf(0.35, 1.4, charge) if kind == "power" else lerpf(0.35, 1.8, charge)
 				if not controlled.kick(ball, shot_direction, strength, lift, kind) and controlled.incoming_pass_remaining > 0:
 					controlled.buffer_kick(kind, shot_direction, strength, lift)
 			charging = false
@@ -444,34 +469,30 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	else:
 		controlled.shot_preparation = 0
 	if pressed.get("square", false):
-		if _attacking_contact():
-			controlled.loft(ball, shot_direction, _pass_distance(shot_direction), pressed.get("l1", false))
-		else:
+		if not _attacking_contact() and controlled.incoming_pass_remaining <= 0:
 			controlled.slide(ball)
-	if pressed.get("pass", false) and _attacking_contact():
-		controlled.kick(ball, shot_direction, 10.5, 0.12, "pass")
-	elif pressed.get("pass", false) and controlled.incoming_pass_remaining > 0:
-		controlled.buffer_kick("pass", shot_direction, 10.5, 0.12)
-	if pressed.get("through", false) and _attacking_contact():
-		var direction := shot_direction
-		var receiver: FootballPlayer = null
-		var best := 0.35
-		for teammate in players:
-			if teammate == controlled or teammate.team != controlled.team:
-				continue
-			var offset := teammate.global_position - controlled.global_position
-			offset.y = 0
-			var alignment := offset.normalized().dot(controlled.aim)
-			if alignment > best:
-				best = alignment
-				receiver = teammate
-		if receiver != null:
-			direction = receiver.global_position + receiver.linear_velocity * 0.55 + controlled.aim * 1.8 - controlled.global_position
-			direction.y = 0
-		if pressed.get("l1", false):
-			controlled.loft(ball, direction.normalized(), direction.length() if receiver != null else 12, false, "lob")
-		else:
-			controlled.kick(ball, direction, 13.5, 0.14, "through")
+
+func _release_delivery(direction: Vector3, button: String, power: float, high: bool) -> void:
+	var receiver := _pass_receiver(controlled, direction)
+	var strength := lerpf(8, 21, power) if button == "through" else lerpf(6.5, 19, power)
+	var distance := lerpf(5, 24, power)
+	if receiver != null:
+		var flight := clampf(receiver.global_position.distance_to(controlled.global_position) / strength, 0.15, 1.6)
+		var lead := receiver.global_position + receiver.linear_velocity * flight
+		if button == "through":
+			lead += Vector3(1 if controlled.team == 0 else -1, 0, 0) * lerpf(1.2, 3.8, power)
+		var offset := lead - controlled.global_position
+		offset.y = 0
+		direction = offset.normalized()
+	if button == "square" or (button == "through" and high):
+		var apex: float = clampf(2.4 + distance * 0.055, 2.8, 4.0) + (1.3 if high else 0)
+		var launch := FootballBall.loft_launch(distance, apex)
+		if not controlled.kick(ball, direction, launch.x, launch.y, "lob") and controlled.incoming_pass_remaining > 0:
+			controlled.buffer_kick("lob", direction, launch.x, launch.y)
+	else:
+		var kind := "through" if button == "through" else "pass"
+		if not controlled.kick(ball, direction, strength, 0.08, kind) and controlled.incoming_pass_remaining > 0:
+			controlled.buffer_kick(kind, direction, strength, 0.08)
 
 func _close_opponent(player: FootballPlayer) -> FootballPlayer:
 	var closest := 1.05
@@ -510,7 +531,9 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 			receiver.incoming_pass_remaining = 3.5
 			receiver.reaction_timer = 0
 	_record(kind, player, {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance})
-	sound.play_event("kick")
+	sound.play_contact(kind, clampf(player.kick_strength / 30, 0.15, 1))
+	if player == controlled and not acceptance and not Input.get_connected_joypads().is_empty():
+		Input.start_joy_vibration(0, vibration_intensity * 0.2, vibration_intensity * clampf(player.kick_strength / 32, 0.15, 1), 0.09)
 
 func _pass_receiver(passer: FootballPlayer, direction: Vector3) -> FootballPlayer:
 	var receiver: FootballPlayer = null
@@ -532,6 +555,7 @@ func _pass_receiver(passer: FootballPlayer, direction: Vector3) -> FootballPlaye
 
 func _on_dribble_contact(player: FootballPlayer) -> void:
 	_record("touch", player)
+	sound.play_contact("touch", 0.2)
 
 func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
 	_record(kind, player, detail)
@@ -609,6 +633,9 @@ func rematch() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") and not event.is_echo():
 		if phase == "playing":
+			delivery_kind = ""
+			charging = false
+			charge = 0
 			phase = "paused"
 			pause_states.clear()
 			for player in players:
@@ -618,7 +645,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					for body in player.ragdoll.bodies:
 						_pause_node(body)
 			ball.freeze = true
-			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/push in defence. L2 + Circle: hold grab.\nSquare: lofted pass in attack, sliding tackle in defence.\nR3: timed hop. R1 + Circle: finesse. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
+			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Hold/release Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/push in defence. L2 + Circle: hold grab.\nHold/release Square: lob in attack; press for a slide in defence.\nR3: timed hop. R1 + Circle: finesse. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Triangle / I: vibration intensity   •   Options / Esc RESUME   •   Q EXIT")
 		elif phase == "paused":
 			phase = "playing"
 			for saved in pause_states:
@@ -632,6 +659,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			hud.overlay.hide()
 	elif phase == "finished" and event.is_action_pressed("confirm"):
 		rematch()
+	elif phase == "paused" and event.is_action_pressed("through") and not event.is_echo():
+		vibration_intensity = 0 if vibration_intensity >= 0.9 else vibration_intensity + 0.3
+		hud.overlay_hint.text = "Triangle / I: vibration %d%%   •   Options / Esc RESUME   •   Q EXIT" % int(vibration_intensity * 100)
 	elif phase != "playing" and event.is_action_pressed("quit"):
 		get_tree().quit()
 
@@ -655,7 +685,7 @@ func _process(delta: float) -> void:
 	aim_line.position = player_pos + controlled.aim * 1.5 + Vector3(0, 0.05, 0)
 	aim_line.rotation.y = atan2(controlled.aim.x, controlled.aim.z)
 	aim_line.visible = phase == "playing"
-	hud.update_match(scores, remaining, controlled, charge)
+	hud.update_match(scores, remaining, controlled, maxf(charge, delivery_charge))
 	var devices := Input.get_connected_joypads()
 	hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
 

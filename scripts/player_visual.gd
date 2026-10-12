@@ -404,7 +404,7 @@ func _jump_pose(player: Node3D) -> void:
 func _shot_pose(player: Node3D) -> void:
 	var time: float = player.action_elapsed
 	var contact_time: float = player.kick_contact_time
-	var coil_end := contact_time * 0.62
+	var coil_end := contact_time * (0.78 if player.kick_kind == "power" else 0.62)
 	var contact: Vector3 = player.global_position + player.kick_target_offset
 	var back: Vector3 = player.global_position - player.action_direction * (0.36 + player.kick_power * 0.12) + player.action_direction.cross(Vector3.UP) * (0.13 if player.kick_right else -0.13) + Vector3.UP * 0.42
 	if player.kick_kind == "chip":

@@ -274,6 +274,31 @@
         "path": "staging/capture.json",
         "format": "game-dev-capture-v1"
       }
+    },
+    {
+      "id": "core-striking",
+      "title": "Charged deliveries, shot profiles and decision-driven match",
+      "description": "One finite physical charge, trajectory, head clearance, direction and missed-kick sequence then 30 seconds of reactive decision play.",
+      "command": {
+        "arguments": [
+          "core-striking"
+        ],
+        "runtime": "node",
+        "workingDirectory": ".",
+        "executable": "tools/visual_scene_check.mjs"
+      },
+      "timeoutSeconds": 120,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }

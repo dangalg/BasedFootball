@@ -345,11 +345,11 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	elif kick_kind == "outside":
 		kick_curve = -1 if curve == 0 else curve
 	kick_power = clampf((strength - 12) / 11, 0, 1)
-	kick_contact_time = lerpf(0.17, 0.22, kick_power) if kick_kind == "shot" else 0.10
+	kick_contact_time = lerpf(0.13, 0.18, kick_power) if kick_kind == "shot" else 0.10
 	if kick_kind in ["finesse", "outside", "chip"]:
-		kick_contact_time = 0.18
+		kick_contact_time = 0.15
 	elif kick_kind == "power":
-		kick_contact_time = lerpf(0.28, 0.35, kick_power)
+		kick_contact_time = lerpf(0.24, 0.31, kick_power)
 	action_duration = kick_contact_time + 0.36 if kick_kind == "shot" else 0.32
 	if kick_kind in ["finesse", "outside", "power", "chip"]:
 		action_duration = kick_contact_time + 0.36
@@ -393,10 +393,9 @@ func try_buffered_kick(ball: FootballBall) -> bool:
 
 func loft(ball: FootballBall, direction: Vector3, distance: float, high: bool = false, kind: String = "lob") -> bool:
 	# Solve a launch arc once; gravity/drag/collisions own the rest of its flight.
-	var apex := 4.0 if high else 3.0
-	var rise := sqrt(2 * 9.8 * (apex - FootballBall.RADIUS))
-	var flight := 2 * rise / 9.8
-	return kick(ball, direction, clampf(distance / flight * 1.15, 5, 18), rise, kind)
+	var apex: float = clampf(distance * 0.08, 0.9, 1.8) if kind == "chip" else clampf(2.4 + distance * 0.055, 2.8, 4.0) + (1.3 if high else 0)
+	var launch := FootballBall.loft_launch(clampf(distance, 3, 24), apex)
+	return kick(ball, direction, launch.x, launch.y, kind)
 
 func _update_kick_target() -> void:
 	if not is_instance_valid(action_ball):

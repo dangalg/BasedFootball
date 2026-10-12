@@ -187,3 +187,6 @@ Circle in defence pushes a nearby opponent or attempts a standing tackle. L2 + C
 
 ## Core action overhaul: handling
 Kicks choose the reachable left or right foot, with that foot supplying contact. Incoming passes use a distinct cushioning impulse; movement can redirect the first touch. A short first-time pass/shot buffer waits for physical reach and still permits misses. Turns retain limited pivot movement. Releasing movement changes an approaching push into a timed braking touch and requests a stopping touch before the escape threshold.
+
+## Charged deliveries and strike profiles
+Hold/release Cross for ground-pass strength, Triangle for a leading through pass, and Square for lob distance. L1 raises a Square lob or makes a Triangle delivery airborne. Aim and receiver lead are selected at release; the ball never homes. Chips use a lower scoop arc. Normal shots prepare faster; power shots commit longer then swing quickly. Opposite spin profiles produce finesse/outside curves. Physical contacts play distinct synthesized sounds. Pause and press Triangle / I to cycle vibration intensity, including off; controller support determines availability.

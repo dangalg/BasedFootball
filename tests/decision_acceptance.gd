@@ -14,6 +14,7 @@ var elapsed := 0.0
 var think_remaining := 0.0
 var switch_remaining := 0.0
 var shot_release_remaining := 0.0
+var pass_release_remaining := 0.0
 var decision_count := 0
 var switches := 0
 var sprint_seconds := 0.0
@@ -63,6 +64,10 @@ func decide(delta: float) -> void:
 		shot_release_remaining -= delta
 		if shot_release_remaining <= 0:
 			actions["primary_release"] = true
+	if pass_release_remaining > 0:
+		pass_release_remaining -= delta
+		if pass_release_remaining <= 0:
+			actions["pass_release"] = true
 	if think_remaining > 0:
 		return
 	think_remaining = 0.16
@@ -114,6 +119,7 @@ func decide(delta: float) -> void:
 				desired = (receiver.global_position - actor.global_position).normalized()
 				actor.aim = Vector3(desired.x, 0, desired.z).normalized()
 				actions["pass"] = true
+				pass_release_remaining = 0.14
 	elif ball.last_touch_team == 1:
 		choice = "intercept"
 		desired = (offset + Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z) * 0.12).normalized()
@@ -183,7 +189,7 @@ func _finish() -> void:
 		"both_teams_face_running_motion": running_samples[0] > 100 and running_samples[1] > 100 and float(backwards_samples[0]) / running_samples[0] < 0.03 and float(backwards_samples[1]) / running_samples[1] < 0.03,
 		"live_match_frames_saved": screenshots.size() >= 7
 	}
-	if checkpoint == 1:
+	if checkpoint in [1, 2]:
 		# Offensive AI quality belongs to checkpoint three; record its touch
 		# count here without making it the acceptance gate for handling.
 		checks.erase("both_teams_make_physical_touches")

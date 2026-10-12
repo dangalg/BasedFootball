@@ -3,6 +3,31 @@ extends RigidBody3D
 
 const RADIUS := 0.11
 
+static func loft_launch(distance: float, apex: float) -> Vector2:
+	# Account for engine air damping at launch; flight is thereafter unconstrained.
+	var drag := 0.22 + float(ProjectSettings.get_setting("physics/3d/default_linear_damp", 0.1))
+	var low := 0.0
+	var high := 18.0
+	for step in range(16):
+		var speed := (low + high) * 0.5
+		var height := speed / drag - 9.8 / (drag * drag) * log(1 + drag * speed / 9.8)
+		if height < apex - RADIUS:
+			low = speed
+		else:
+			high = speed
+	var lift := (low + high) * 0.5
+	low = 0.1
+	high = 5.0
+	for step in range(18):
+		var time := (low + high) * 0.5
+		var height := (lift + 9.8 / drag) * (1 - exp(-drag * time)) / drag - 9.8 * time / drag
+		if height > 0:
+			low = time
+		else:
+			high = time
+	var flight := (low + high) * 0.5
+	return Vector2(distance * drag / (1 - exp(-drag * flight)), lift)
+
 var last_touch_team: int = -1
 var last_touch_id: String = ""
 var touches: int = 0
@@ -70,5 +95,5 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
 		state.apply_central_force(-horizontal * 0.13)
 	# Explicit aerodynamic spin force, bounded for numerical stability.
-	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0009
-	state.apply_central_force(magnus.limit_length(0.45))
+	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0018
+	state.apply_central_force(magnus.limit_length(1.2))
