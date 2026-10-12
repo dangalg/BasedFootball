@@ -209,7 +209,7 @@ func animate(player: Node3D, delta: float) -> void:
 		_pose_foot(player, true, player.global_position + player.action_direction * lerpf(0.12, 0.68, extension) + Vector3.UP * 0.095)
 	elif player.action_kind == "kick":
 		var contact: Vector3 = player.global_position + player.kick_target_offset
-		var backswing: Vector3 = player.body_visual.to_global(Vector3(0.105, 0.18, 0.26))
+		var backswing: Vector3 = player.global_position - player.action_direction * 0.26 + player.action_direction.cross(Vector3.UP) * 0.105 + Vector3.UP * 0.18
 		var target: Vector3
 		if player.action_elapsed <= player.kick_contact_time:
 			target = backswing.lerp(contact, smoothstep(0, player.kick_contact_time, player.action_elapsed))
@@ -217,8 +217,12 @@ func animate(player: Node3D, delta: float) -> void:
 			var follow := smoothstep(player.kick_contact_time, player.action_duration, player.action_elapsed)
 			target = contact + player.action_direction * 0.22 * follow + Vector3.UP * 0.24 * follow
 		_pose_foot(player, true, target)
-		if player.kick_kind == "shot":
+		if player.kick_kind in ["shot", "finesse", "outside", "power", "chip"]:
 			_shot_pose(player)
+		# Toe and swing follow requested aim, independently of the head/body facing.
+		var toe_angle: float = atan2(-player.action_direction.x, -player.action_direction.z)
+		toe_angle += 0.30 if player.kick_kind == "finesse" else -0.30 if player.kick_kind == "outside" else 0
+		right_boot.global_basis = Basis(Vector3.UP, toe_angle)
 	elif touching:
 		var swing := smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
@@ -235,7 +239,7 @@ func animate(player: Node3D, delta: float) -> void:
 		left_arm.rotation.x = -0.25
 		right_arm.rotation.x = 0.35
 		upper_body.rotation.y = sin(clampf(player.action_elapsed / player.action_duration, 0, 1) * PI) * -0.18
-		if player.kick_kind == "shot":
+		if player.kick_kind in ["shot", "finesse", "outside", "power", "chip"]:
 			var preparation := smoothstep(0, player.kick_contact_time * 0.65, player.action_elapsed)
 			var strike := smoothstep(player.kick_contact_time * 0.65, player.kick_contact_time + 0.12, player.action_elapsed)
 			upper_body.rotation.y = lerpf(0.4 * preparation, -0.42, strike)
@@ -269,7 +273,9 @@ func _shot_pose(player: Node3D) -> void:
 	var contact_time: float = player.kick_contact_time
 	var coil_end := contact_time * 0.62
 	var contact: Vector3 = player.global_position + player.kick_target_offset
-	var back: Vector3 = player.body_visual.to_global(Vector3(0.13, 0.42, 0.36 + player.kick_power * 0.12))
+	var back: Vector3 = player.global_position - player.action_direction * (0.36 + player.kick_power * 0.12) + player.action_direction.cross(Vector3.UP) * 0.13 + Vector3.UP * 0.42
+	if player.kick_kind == "chip":
+		back = player.global_position - player.action_direction * 0.18 + Vector3.UP * 0.12
 	var target: Vector3
 	if time < coil_end:
 		target = player.kick_start_boot.lerp(back, smoothstep(0, coil_end, time))

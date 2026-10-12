@@ -34,6 +34,8 @@ func _ready() -> void:
 	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
 	var athlete_acceptance := "--athlete-acceptance" in OS.get_cmdline_user_args()
 	var skinned_shot_acceptance := "--skinned-shot-acceptance" in OS.get_cmdline_user_args()
+	var shots_team_acceptance := "--shots-team-acceptance" in OS.get_cmdline_user_args()
+	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
 	acceptance = impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
@@ -70,7 +72,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -85,7 +87,7 @@ func _ready() -> void:
 		session.begin(self)
 
 func _install_input() -> void:
-	for action in ["left", "right", "up", "down", "pass", "shoot", "lob", "through", "jockey", "tackle", "slide", "shoulder", "hop", "sprint", "switch", "pause", "confirm", "quit"]:
+	for action in ["left", "right", "up", "down", "pass", "shoot", "lob", "through", "jockey", "tackle", "slide", "shoulder", "hop", "sprint", "switch", "modifier_r1", "pause", "confirm", "quit"]:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action, 0.18)
 	var key_bindings := {"left": KEY_A, "right": KEY_D, "up": KEY_W, "down": KEY_S, "pass": KEY_SPACE, "shoot": KEY_J, "lob": KEY_U, "through": KEY_I, "jockey": KEY_CTRL, "tackle": KEY_K, "slide": KEY_L, "shoulder": KEY_H, "sprint": KEY_SHIFT, "switch": KEY_TAB, "pause": KEY_ESCAPE, "confirm": KEY_ENTER, "quit": KEY_Q}
@@ -96,6 +98,9 @@ func _install_input() -> void:
 	var hop_key := InputEventKey.new()
 	hop_key.physical_keycode = KEY_E
 	InputMap.action_add_event("hop", hop_key)
+	var modifier_key := InputEventKey.new()
+	modifier_key.physical_keycode = KEY_F
+	InputMap.action_add_event("modifier_r1", modifier_key)
 	# Godot's standardized south/east/west/north slots also cover PlayStation pads.
 	var buttons := {"pass": JOY_BUTTON_A, "shoot": JOY_BUTTON_B, "lob": JOY_BUTTON_X, "through": JOY_BUTTON_Y, "switch": JOY_BUTTON_LEFT_SHOULDER, "pause": JOY_BUTTON_START, "confirm": JOY_BUTTON_A, "quit": JOY_BUTTON_BACK}
 	for action in buttons:
@@ -103,8 +108,11 @@ func _install_input() -> void:
 		button.button_index = buttons[action]
 		InputMap.action_add_event(action, button)
 	var hop_button := InputEventJoypadButton.new()
-	hop_button.button_index = JOY_BUTTON_RIGHT_SHOULDER
+	hop_button.button_index = JOY_BUTTON_RIGHT_STICK
 	InputMap.action_add_event("hop", hop_button)
+	var modifier_button := InputEventJoypadButton.new()
+	modifier_button.button_index = JOY_BUTTON_RIGHT_SHOULDER
+	InputMap.action_add_event("modifier_r1", modifier_button)
 	for mapping in [["left", JOY_AXIS_LEFT_X, -1.0], ["right", JOY_AXIS_LEFT_X, 1.0], ["up", JOY_AXIS_LEFT_Y, -1.0], ["down", JOY_AXIS_LEFT_Y, 1.0], ["sprint", JOY_AXIS_TRIGGER_RIGHT, 1.0], ["jockey", JOY_AXIS_TRIGGER_LEFT, 1.0]]:
 		var axis := InputEventJoypadMotion.new()
 		axis.axis = mapping[1]
@@ -312,7 +320,7 @@ func _physics_process(delta: float) -> void:
 	if movement.length_squared() > 0.04:
 		if not controlled.jockey or _attacking_contact():
 			controlled.aim = controlled.intent.normalized()
-	if decision_driver == null and Input.is_action_just_pressed("switch"):
+	if decision_driver == null and Input.is_action_just_pressed("switch") and not _attacking_contact():
 		_switch_player()
 	var right := Vector2(Input.get_joy_axis(0, JOY_AXIS_RIGHT_X), Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)) if decision_driver == null else Vector2.ZERO
 	if right.length() > 0.6 and not right_stick_latched:
@@ -321,7 +329,9 @@ func _physics_process(delta: float) -> void:
 	var controller_actions: Dictionary = {
 		"pass": Input.is_action_just_pressed("pass"), "through": Input.is_action_just_pressed("through"),
 		"primary": Input.is_action_just_pressed("shoot"), "primary_release": Input.is_action_just_released("shoot"),
-		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop")
+		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop"),
+		"l1": Input.is_action_pressed("switch"), "r1": Input.is_action_pressed("modifier_r1"), "l2": controlled.jockey,
+		"run": Input.is_action_just_pressed("switch"), "support": Input.is_action_just_pressed("modifier_r1")
 	}
 	if decision_driver != null:
 		controller_actions = decision_driver.actions
@@ -354,6 +364,19 @@ func _attacking_contact() -> bool:
 	return controlled.reach_ball(ball) and ball.last_touch_team in [-1, controlled.team]
 
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
+	var shot_direction := controlled.intent.normalized() if controlled.intent.length() > 0.2 else controlled.aim
+	if _attacking_contact() and (pressed.get("run", false) or pressed.get("support", false)) and not pressed.get("primary", false) and not charging:
+		var candidate: FootballPlayer = null
+		var closest := INF
+		for teammate in players:
+			if teammate != controlled and teammate.team == controlled.team and teammate.global_position.distance_to(controlled.global_position) < closest:
+				candidate = teammate
+				closest = teammate.global_position.distance_to(controlled.global_position)
+		if candidate != null:
+			if pressed.get("run", false):
+				candidate.run_requested = 2.5
+			else:
+				candidate.support_requested = 2.5
 	if pressed.get("hop", false):
 		controlled.hop()
 	if controlled.ragdoll != null or controlled.hop_active:
@@ -380,7 +403,11 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		charge = minf(1, charge + delta / 0.8)
 		controlled.shot_preparation = charge
 		if pressed.get("primary_release", false):
-			controlled.kick(ball, controlled.aim, lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), "shot")
+			var kind := "power" if pressed.get("l1", false) and pressed.get("r1", false) else "chip" if pressed.get("l1", false) else "finesse" if pressed.get("r1", false) else "outside" if pressed.get("l2", false) else "shot"
+			if kind == "chip":
+				controlled.loft(ball, shot_direction, lerpf(5, 15, charge), false, kind)
+			else:
+				controlled.kick(ball, shot_direction, lerpf(16, 30, charge) if kind == "power" else lerpf(10, 19, charge) if kind in ["finesse", "outside"] else lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), kind)
 			charging = false
 			charge = 0
 			controlled.shot_preparation = 0
@@ -388,13 +415,13 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		controlled.shot_preparation = 0
 	if pressed.get("square", false):
 		if _attacking_contact():
-			controlled.kick(ball, controlled.aim, 12.5, 5.2, "lob")
+			controlled.loft(ball, shot_direction, _pass_distance(shot_direction), pressed.get("l1", false))
 		else:
 			controlled.slide(ball)
 	if pressed.get("pass", false) and _attacking_contact():
-		controlled.kick(ball, controlled.aim, 10.5, 0.12, "pass")
+		controlled.kick(ball, shot_direction, 10.5, 0.12, "pass")
 	if pressed.get("through", false) and _attacking_contact():
-		var direction := controlled.aim
+		var direction := shot_direction
 		var receiver: FootballPlayer = null
 		var best := 0.35
 		for teammate in players:
@@ -409,7 +436,24 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		if receiver != null:
 			direction = receiver.global_position + receiver.linear_velocity * 0.55 + controlled.aim * 1.8 - controlled.global_position
 			direction.y = 0
-		controlled.kick(ball, direction, 13.5, 0.14, "through")
+		if pressed.get("l1", false):
+			controlled.loft(ball, direction.normalized(), direction.length() if receiver != null else 12, false, "lob")
+		else:
+			controlled.kick(ball, direction, 13.5, 0.14, "through")
+
+func _pass_distance(direction: Vector3) -> float:
+	var distance := 12.0
+	var best := 0.55
+	for teammate in players:
+		if teammate.team != controlled.team or teammate == controlled:
+			continue
+		var offset := teammate.global_position - controlled.global_position
+		offset.y = 0
+		var alignment := offset.normalized().dot(direction)
+		if alignment > best:
+			best = alignment
+			distance = offset.length()
+	return clampf(distance, 6, 20)
 
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 	_record(kind, player, {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance})

@@ -130,3 +130,11 @@ turning; two powers and three offsets) plus four physically deflected misses.
 Acceptance is at least 95 percent reachable contacts with all deflections missing.
 Ball speeds are sampled after the following physics step. Baked boot vertices are
 compared to their expected bone transforms after the completed render frame.
+
+`shots-team` runs one finite rendered sequence covering modifier selection,
+opposite curl, standard/high lob head clearance, side/backward actions, support
+and defensive fixtures, then 30 seconds of normal match physics and team AI.
+The fixture drives the controlled player through current-state AI actions; it
+uses no hardware input. Artistic quality and hardware controller feel still
+require human play. Historical impact tests expect R1 hop; use this new R3 mapping
+when revising those fixtures rather than interpreting that old mapping as current.

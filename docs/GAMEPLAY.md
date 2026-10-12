@@ -78,7 +78,7 @@ the player blends through a get-up pose at a nearby clear standing position.
 Getting up is an authored blend, not a fully muscular physics simulation. Fallen
 players cannot control the ball, kick, tackle or jump; you can switch teammates.
 
-Press **R1 / E** for a timed hop. After a short preparation, an upward impulse lifts
+Press **R3 / E** for a timed hop. After a short preparation, an upward impulse lifts
 the real collision body. Reduced air steering, gravity, leg clearance and landing
 determine the result. A late attempt can be hit before clearing the tackle. The
 ball stays free, and repeated hops have a cooldown and stamina cost.
@@ -133,3 +133,26 @@ swing commits. The player retains physical run-up momentum until contact rather
 than braking at release. The supporting foot steps toward the estimated plant;
 a late deflection can still remove the ball from the committed swing. Ball
 position, collision radius and hit tolerance are unchanged.
+
+## Kick variety and coordinated teams
+
+R1 + Circle requests inside-foot finesse; L2 + Circle requests outside-foot curl.
+Signed angular momentum at boot contact produces opposite Magnus curvature.
+L1 + R1 + Circle requests a stronger, longer-prepared power strike. L1 + Circle
+requests a chip. Square and L1 + Square choose standard/high lofted passes with
+launch arcs aimed at roughly 3/4 metre apexes, adjusted for pass distance.
+Gravity, drag, contact quality and collisions still affect actual clearance.
+
+Left-stick direction at request/release selects the kick direction independently
+of body facing; swing and toe orientation use that direction. Side and backward
+passes are available when physically reachable. The ball never homes to a receiver.
+L1 + Triangle requests a lofted through pass. In possession L1 asks a teammate
+to run, R1 asks for support; outside attacking contact L1 switches teammates.
+R3 is the custom timed-hop button; R1 is now the finesse/support modifier.
+
+AI players choose distinct carrier/press, support, marking and goal-cover jobs.
+Support evaluates passing-lane obstruction and teammate spacing, with a deeper
+safety option. Passing considers lane clearance, receiver space and advancement;
+blocked lanes can produce lobs. AI seeks shooting opportunities and uses the same
+kick profiles as the controller. Bounded reaction/decision randomness remains;
+physical outcomes and launch rules are shared.

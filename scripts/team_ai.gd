@@ -38,22 +38,43 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			nearest = other
 		if other.reach_ball(ball, 1.4):
 			teammate_holder = other
+	var opponent_holder: FootballPlayer = null
+	var opponent_distance := INF
+	for other in players:
+		if other.team != player.team and other.upright_ready():
+			var distance := other.global_position.distance_to(ball.global_position)
+			if distance < opponent_distance:
+				opponent_distance = distance
+				opponent_holder = other
+	var own_possession: bool = teammate_holder != null and nearest_distance <= opponent_distance and ball.global_position.y < 0.5
 	var target := ball.global_position
-	if nearest != player:
-		var lane := (-5.0 if player.shirt_number == 7 else 5.0) + player.ai_lane_offset
-		if player.shirt_number == 4:
-			lane = 0.0
-		var support_x := ball.global_position.x + attack * (4.0 if teammate_holder != null else -5.0)
-		if player.shirt_number == 4:
-			support_x = ball.global_position.x - attack * 6.0
-		target = Vector3(clampf(support_x, -13.0, 13.0), 0, clampf(ball.global_position.z * 0.35 + lane, -9, 9))
-	else:
-		# Approach from behind the ball to carry it towards the opposing goal.
+	if nearest == player:
+		player.team_role = "carry" if own_possession else "press"
 		var goal_direction := (goal - ball.global_position).normalized()
-		if player.global_position.distance_to(ball.global_position) > 1.5:
-			target = ball.global_position - goal_direction * 0.65
+		target = goal if own_possession else ball.global_position - goal_direction * 0.65 + ball.linear_velocity * 0.12
+	elif own_possession:
+		player.team_role = "support"
+		target = _support_position(player, teammate_holder, players, attack)
+	else:
+		var own_goal := Vector3(-attack * 17.5, 0, 0)
+		if player.shirt_number == 4:
+			player.team_role = "cover"
+			target = own_goal.lerp(ball.global_position, 0.28)
 		else:
-			target = goal
+			player.team_role = "mark"
+			var threat: FootballPlayer = null
+			var danger := INF
+			for other in players:
+				if other.team != player.team and other != opponent_holder:
+					var distance := other.global_position.distance_to(own_goal)
+					if distance < danger:
+						threat = other
+						danger = distance
+			target = threat.global_position.lerp(ball.global_position, 0.22) if threat != null else own_goal.lerp(ball.global_position, 0.5)
+			target += (own_goal - target).normalized() * 0.8
+	target.x = clampf(target.x, -16.5, 16.5)
+	target.z = clampf(target.z, -10, 10)
+	player.team_target = target
 	var direction := target - player.global_position
 	direction.y = 0.0
 	player.intent = direction.normalized() if direction.length() > 0.65 else Vector3.ZERO
@@ -78,33 +99,78 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		elif ball_offset.length() < 2.6 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
 			if confidence < 0.35 + player.ai_style * 0.35 and player.slide(ball):
 				return "slide"
-	if not player.reach_ball(ball):
+	if nearest != player or not player.reach_ball(ball):
 		return ""
 	var shot_direction := goal - player.global_position
 	shot_direction.y = 0
 	if absf(goal.x - player.global_position.x) < 10 and absf(player.global_position.z) < 6:
 		player.aim = shot_direction.normalized()
-		if confidence < 0.78 and player.kick(ball, player.aim.rotated(Vector3.UP, player.ai_rng.randf_range(-0.045, 0.045) / player.touch_skill), player.ai_rng.randf_range(16, 19), player.ai_rng.randf_range(1.0, 1.6), "shot"):
-			return "shot"
+		var blocked := lane_clearance(player.global_position, goal, players, player.team) < 0.75
+		var kind := "finesse" if blocked else "power" if confidence < 0.18 and absf(goal.x - player.global_position.x) > 6 else "shot"
+		if confidence < 0.60 and player.kick(ball, player.aim.rotated(Vector3.UP, player.ai_rng.randf_range(-0.045, 0.045) / player.touch_skill), player.ai_rng.randf_range(22, 27) if kind == "power" else player.ai_rng.randf_range(16, 19), player.ai_rng.randf_range(1.0, 1.6), kind):
+			return kind
 	# A defender under pressure finds an advanced teammate, using the same kick.
 	var pressured := false
 	for opponent in players:
 		if opponent.team != player.team and opponent.global_position.distance_to(player.global_position) < 2.1:
 			pressured = true
-	if pressured:
-		var receiver: FootballPlayer = null
-		var best := -INF
-		for other in players:
-			if other == player or other.team != player.team:
-				continue
-			var advance := (other.global_position.x - player.global_position.x) * attack
-			advance += player.ai_rng.randf_range(-1.5, 1.5)
-			if advance > best:
-				best = advance
-				receiver = other
-		if receiver != null and best > 0.5:
-			var pass_direction := receiver.global_position - player.global_position
-			pass_direction.y = 0
-			if confidence < 0.85 and player.kick(ball, pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / player.touch_skill), clampf(pass_direction.length() * player.ai_rng.randf_range(1.2, 1.4), 7, 14), 0.12, "pass"):
-				return "pass"
+	var receiver: FootballPlayer = null
+	var best := -INF
+	for other in players:
+		if other == player or other.team != player.team or not other.upright_ready():
+			continue
+		var clearance := lane_clearance(player.global_position, other.global_position, players, player.team)
+		var open := INF
+		for opponent in players:
+			if opponent.team != player.team:
+				open = minf(open, opponent.global_position.distance_to(other.global_position))
+		var advance := (other.global_position.x - player.global_position.x) * attack
+		var score := minf(clearance, 3) + minf(open, 4) * 0.45 + advance * 0.18 - other.global_position.distance_to(player.global_position) * 0.08
+		score += player.ai_rng.randf_range(-0.3, 0.3)
+		if score > best:
+			best = score
+			receiver = other
+	if receiver != null and confidence < (0.85 if pressured else 0.38) and best > 1.1:
+		var pass_direction := receiver.global_position + receiver.linear_velocity * 0.35 - player.global_position
+		pass_direction.y = 0
+		pass_direction = pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / player.touch_skill)
+		if lane_clearance(player.global_position, receiver.global_position, players, player.team) < 0.9:
+			if player.loft(ball, pass_direction.normalized(), pass_direction.length()):
+				return "lob"
+		elif player.kick(ball, pass_direction.normalized(), clampf(pass_direction.length() * 1.3, 7, 14), 0.12, "pass"):
+			return "pass"
 	return ""
+
+static func lane_clearance(start: Vector3, end: Vector3, players: Array[FootballPlayer], team: int) -> float:
+	var segment := end - start
+	segment.y = 0
+	var clearance := 20.0
+	for opponent in players:
+		if opponent.team == team:
+			continue
+		var offset := opponent.global_position - start
+		offset.y = 0
+		var along := offset.dot(segment) / maxf(segment.length_squared(), 0.001)
+		if along > 0.08 and along < 0.95:
+			clearance = minf(clearance, (offset - segment * along).length())
+	return clearance
+
+static func _support_position(player: FootballPlayer, holder: FootballPlayer, players: Array[FootballPlayer], attack: float) -> Vector3:
+	var lane := -4.0 if player.shirt_number == 10 else 4.0
+	if player.support_requested > 0:
+		return holder.global_position + Vector3(-attack * 2.5, 0, lane * 0.65)
+	if player.run_requested > 0:
+		return holder.global_position + Vector3(attack * 7, 0, lane * 0.6)
+	var advance := -3.0 if player.shirt_number == 4 else 4.5
+	var best := -INF
+	var target := holder.global_position + Vector3(attack * advance, 0, lane)
+	for adjustment in [-2.0, 0.0, 2.0]:
+		var candidate := holder.global_position + Vector3(attack * advance, 0, lane + adjustment + player.ai_lane_offset * 0.5)
+		var score := minf(lane_clearance(holder.global_position, candidate, players, player.team), 4)
+		for teammate in players:
+			if teammate != player and teammate != holder and teammate.team == player.team:
+				score -= maxf(0, 3 - candidate.distance_to(teammate.global_position))
+		if score > best:
+			best = score
+			target = candidate
+	return target

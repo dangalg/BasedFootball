@@ -69,6 +69,11 @@ var shot_preparation := 0.0
 var strike_delta := 1.0 / 120.0
 var last_strike_speed := 0.0
 var last_strike_quality := 0.0
+var kick_curve := 0.0
+var team_role := ""
+var team_target := Vector3.ZERO
+var run_requested := 0.0
+var support_requested := 0.0
 var last_boot_world := Vector3.ZERO
 var completed_kicks: int = 0
 var last_kick_contact_distance: float = 0.0
@@ -125,6 +130,8 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	run_requested = maxf(0, run_requested - delta)
+	support_requested = maxf(0, support_requested - delta)
 	strike_delta = delta
 	hop_cooldown = maxf(0, hop_cooldown - delta)
 	if ragdoll != null:
@@ -280,7 +287,7 @@ func reach_ball(ball: FootballBall, distance: float = CONTROL_REACH) -> bool:
 	difference.y = 0
 	return difference.length() < distance and ball.global_position.y < 0.75
 
-func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "") -> bool:
+func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "", curve: float = 0) -> bool:
 	if not upright_ready():
 		return false
 	if kick_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0 or not reach_ball(ball):
@@ -292,9 +299,20 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	kick_kind = kind if kind != "" else ("shot" if strength >= 15.0 else "pass")
 	kick_strength = strength
 	kick_lift = lift
+	kick_curve = curve
+	if kick_kind == "finesse":
+		kick_curve = 1 if curve == 0 else curve
+	elif kick_kind == "outside":
+		kick_curve = -1 if curve == 0 else curve
 	kick_power = clampf((strength - 12) / 11, 0, 1)
 	kick_contact_time = lerpf(0.17, 0.22, kick_power) if kick_kind == "shot" else 0.10
+	if kick_kind in ["finesse", "outside", "chip"]:
+		kick_contact_time = 0.18
+	elif kick_kind == "power":
+		kick_contact_time = lerpf(0.28, 0.35, kick_power)
 	action_duration = kick_contact_time + 0.36 if kick_kind == "shot" else 0.32
+	if kick_kind in ["finesse", "outside", "power", "chip"]:
+		action_duration = kick_contact_time + 0.36
 	kick_start_boot = visual_controller.right_boot.global_position
 	kick_plant_start = visual_controller.left_boot.global_position
 	kick_plant_world = global_position - action_direction.cross(Vector3.UP) * 0.12 + action_direction * 0.08 + Vector3.UP * 0.075
@@ -311,6 +329,13 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	touch_cooldown = action_duration
 	last_boot_world = visual_controller.right_boot.global_position
 	return true
+
+func loft(ball: FootballBall, direction: Vector3, distance: float, high: bool = false, kind: String = "lob") -> bool:
+	# Solve a launch arc once; gravity/drag/collisions own the rest of its flight.
+	var apex := 4.0 if high else 3.0
+	var rise := sqrt(2 * 9.8 * (apex - FootballBall.RADIUS))
+	var flight := 2 * rise / 9.8
+	return kick(ball, direction, clampf(distance / flight * 1.15, 5, 18), rise, kind)
 
 func _update_kick_target() -> void:
 	if not is_instance_valid(action_ball):
@@ -468,7 +493,7 @@ func _update_challenge() -> void:
 					var target := action_direction * kick_strength + Vector3.UP * kick_lift
 					last_strike_speed = maxf(0, ((boot_world - last_boot_world) / maxf(strike_delta, 0.001) - linear_velocity).dot(action_direction))
 					last_strike_quality = 1.0
-					if kick_kind == "shot":
+					if kick_kind in ["shot", "finesse", "outside", "power", "chip"]:
 						# Swing speed and how centrally the swept boot meets the ball
 						# affect the strike. No impulse without the visible boot contact.
 						last_strike_quality = lerpf(1.0, 0.78, clampf(contact_distance / (FootballBall.RADIUS + 0.095), 0, 1))
@@ -479,6 +504,10 @@ func _update_challenge() -> void:
 					var impulse := (target - incoming * 0.85) * action_ball.mass
 					var contact_offset := Vector3(0, -FootballBall.RADIUS * clampf(kick_lift / 7, 0.04, 0.35), 0)
 					action_ball.touch(team, player_id, impulse, contact_offset)
+					if absf(kick_curve) > 0:
+						# Signed vertical angular momentum creates opposite physical curls.
+						var inertia := 0.4 * action_ball.mass * FootballBall.RADIUS * FootballBall.RADIUS
+						action_ball.apply_torque_impulse(Vector3.UP * inertia * 48 * clampf(kick_curve, -1, 1))
 					action_ball.control_block_remaining = 0.3
 					action_has_hit = true
 					completed_kicks += 1

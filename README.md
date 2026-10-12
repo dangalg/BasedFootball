@@ -80,9 +80,9 @@ attacking and defending according to nearby possession.
 | Lofted pass / sliding tackle | Square **□** in attack / defence | U / L |
 | Through pass | Triangle **△** | I |
 | Shield / jockey | L2 | Ctrl |
-| Timed hop over a slide | R1 | E |
+| Timed hop over a slide | R3 | E |
 | Sprint | R2 | Shift |
-| Switch teammate | L1 | Tab |
+| Switch teammate in defence / request run in attack | L1 | Tab |
 | Directional teammate selection | Right stick flick | — |
 | Pause / resume | Options | Escape |
 | Rematch at full time | Cross **✕** | Enter |
@@ -90,7 +90,7 @@ attacking and defending according to nearby possession.
 
 **First-touch tips:** use smaller stick movements to stay close to the ball,
 release the stick to settle it, and allow a braking step on sharp turns.
-R1 gives a short physical hop: press before the slide reaches your legs. A late
+R3 gives a short physical hop: press before the slide reaches your legs. A late
 jump can still be tripped, and the ball stays free while you are airborne.
 The gold line shows your aim. Shoulder challenges need side contact with an
 opponent; they do not guarantee a turnover.
@@ -141,3 +141,9 @@ and **11 live AI checks**, including a physical fall and recovery during the mat
 ---
 
 <p align="center"><strong>One ball. Same rules. A team worth keeping.</strong></p>
+
+Shot modifiers: **R1 + Circle** finesse, **L2 + Circle** outside-foot curl,
+**L1 + Circle** chip, **L1 + R1 + Circle** power. **L1 + Square** high lob;
+**L1 + Triangle** lobbed through pass. R1 calls support in possession.
+On keyboard, F acts as R1; Tab acts as L1; Ctrl acts as L2. Aim with the left
+stick or WASD at the kick request (shot release). Right-stick switching remains.

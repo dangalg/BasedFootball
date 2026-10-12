@@ -65,7 +65,7 @@ func _ready() -> void:
 	charge_bar.size = Vector2(281, 4)
 	var help := _panel(root, Vector2(716, 818), Vector2(700, 58))
 	_label(help, "CROSS PASS   CIRCLE SHOT / TACKLE   SQUARE LOB / SLIDE   TRIANGLE THROUGH", 13, PAPER, Vector2(18, 9))
-	_label(help, "R1 hop / E • R2 sprint • L2 shield / jockey • L1 / right stick switch • Options pause", 11, MUTED, Vector2(18, 34))
+	_label(help, "R3 hop • R1+Circle finesse • L1+Circle chip • L1+R1+Circle power • Options pause", 11, MUTED, Vector2(18, 34))
 	status = _label(root, "", 11, MUTED, Vector2(28, 91))
 	banner = _label(root, "", 24, GOLD, Vector2(460, 105))
 	banner.size = Vector2(520, 36)

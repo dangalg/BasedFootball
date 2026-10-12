@@ -70,5 +70,5 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
 		state.apply_central_force(-horizontal * 0.13)
 	# Explicit aerodynamic spin force, bounded for numerical stability.
-	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0007
-	state.apply_central_force(magnus.limit_length(0.25))
+	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0009
+	state.apply_central_force(magnus.limit_length(0.45))

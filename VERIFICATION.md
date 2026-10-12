@@ -316,3 +316,32 @@ for an approved revised plan. User play also reported frequent kick misses.
 Preparation now updates its ball intercept, the final swing commits in world
 space and physical run-up momentum is retained until the strike. Measurements
 now use the following physics step and completed render frame.
+
+## Physical kick variety and team play - 2026-10-12
+
+Build and test-script checks clean. Exactly one `shots-team` behavioral sequence
+passed 70 checks, including 41 capture writes, in
+`run_1791821362963_4a50f210992f40dcb32d9a8d8cdb374a`. Capture contract, closed
+artifact roster and hashes verified. Reviewed side-pass contact, finesse action
+and a live match frame. Fixed close-up framing does not show the full lob flight;
+head clearance is measured by game-owned physics telemetry rather than proven
+by a single screenshot.
+
+Modifier selection, physical boot contacts, side/backward requested directions
+and opposite signed curls passed. Finesse/outside deviation at six metres was
+-0.043/+0.043 m: the short-distance curl is currently subtle, and artistic
+satisfaction is not established by that sign check. Power launch was 22.16 m/s
+versus finesse 18.27 m/s in these fixtures. Standard, high and side lob bottom
+clearances over a 1.8 m standing head at seven metres were 0.85, 1.65 and 0.72 m.
+These are particular grounded launches; nearby blockers and unusual incoming
+ball motion are not guaranteed to be cleared. No keeper was added.
+
+Tactical fixtures verified separated support targets and press/mark/cover jobs.
+Thirty seconds of normal match physics and current-state AI yielded seven
+completed passes/lobs, two completed shots, a 1:1 score, and support/press roles
+for both teams. This checks cooperative opportunities and execution, not an
+optimal team strategy or long-term match balance. The controlled player was
+driven through current-state AI; no physical controller input was injected.
+R3 hop mapping was checked; R1 now supplies finesse/support. Historical R1
+impact fixtures need mapping updates before reuse. Controller feel, anatomy in
+every direction and subjective fun remain for user evaluation.
