@@ -32,6 +32,8 @@ func _ready() -> void:
 	var handling_acceptance := "--handling-acceptance" in OS.get_cmdline_user_args()
 	var decision_acceptance := "--decision-acceptance" in OS.get_cmdline_user_args()
 	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
+	var athlete_acceptance := "--athlete-acceptance" in OS.get_cmdline_user_args()
+	visual_acceptance = visual_acceptance or athlete_acceptance
 	acceptance = impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
 	squad.load_squad(acceptance)
@@ -66,7 +68,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:

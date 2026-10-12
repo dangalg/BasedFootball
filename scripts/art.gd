@@ -33,17 +33,31 @@ static func capsule(parent: Node3D, radius: float, height: float, pos: Vector3, 
 	return mesh(parent, shape, mat, pos)
 
 static func tailored_mesh(parent: Node3D, profile: Array, mat: Material) -> MeshInstance3D:
-	# Elliptical cross-sections give clothing a waist, shoulders and tapered edges.
+	# Godot front faces wind clockwise. Explicit outward normals also keep
+	# tapered skin/clothing lit correctly; end caps prevent open joint seams.
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	surface.set_smooth_group(0)
 	for row in range(profile.size() - 1):
 		for segment in range(16):
-			for corner in [[row, segment], [row + 1, segment], [row + 1, segment + 1], [row, segment], [row + 1, segment + 1], [row, segment + 1]]:
+			for corner in [[row, segment], [row + 1, segment + 1], [row + 1, segment], [row, segment], [row, segment + 1], [row + 1, segment + 1]]:
 				var section: Vector3 = profile[corner[0]]
 				var angle := float(corner[1]) * TAU / 16.0
+				var before: Vector3 = profile[maxi(0, corner[0] - 1)]
+				var after: Vector3 = profile[mini(profile.size() - 1, corner[0] + 1)]
+				var slope: Vector3 = (after - before) / maxf(after.x - before.x, 0.001)
+				var nx := cos(angle) / maxf(section.y, 0.001)
+				var nz := sin(angle) / maxf(section.z, 0.001)
+				surface.set_normal(Vector3(nx, -nx * cos(angle) * slope.y - nz * sin(angle) * slope.z, nz).normalized())
 				surface.add_vertex(Vector3(cos(angle) * section.y, section.x, sin(angle) * section.z))
-	surface.generate_normals()
+	for end in [0, profile.size() - 1]:
+		var section: Vector3 = profile[end]
+		for segment in range(16):
+			surface.set_normal(Vector3.DOWN if end == 0 else Vector3.UP)
+			surface.add_vertex(Vector3(0, section.x, 0))
+			for offset in ([1, 0] if end == 0 else [0, 1]):
+				var angle := float(segment + offset) * TAU / 16.0
+				surface.add_vertex(Vector3(cos(angle) * section.y, section.x, sin(angle) * section.z))
 	surface.index()
 	var node := mesh(parent, surface.commit(), mat)
 	return node

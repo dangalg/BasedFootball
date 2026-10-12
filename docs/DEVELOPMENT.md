@@ -106,3 +106,11 @@ python tools/make_icon.py
 Court textures live in `assets/court/`. Branding includes SVG, PNG and a seven-size
 Windows ICO in `assets/branding/`. Athlete meshes and game sounds are generated
 by project code. Documentation images are actual recorded prototype captures.
+
+## Athlete animation review
+
+The `athlete-animation` scenario runs one rendered sequence covering both teams
+running, turns, control touches, a kick, slide, hop and physical fall/recovery.
+It saves match-camera and close-up frames. Automated checks establish contact,
+finite transforms, ground-height steps and recovery; inspect the frames for
+artistic quality. It is not a complete match or hardware controller test.

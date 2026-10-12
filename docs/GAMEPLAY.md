@@ -102,3 +102,12 @@ locally; test scenarios use isolated career data.
 
 This prototype is still being tuned. These rules describe the implementation,
 not a claim that every contact or animation already feels ideal.
+
+## Athlete presentation
+
+The original articulated athletes have tapered limbs, shaped shoulders and jaws,
+individual hair and skin variations, kit trim and boot laces. Locomotion uses a
+ground-height stance phase and a lifted swing phase through the same leg IK used
+by action contacts. Acceleration adds bounded torso lean; kicks add torso rotation
+and supporting-arm poses. These remain procedural models and animation, rather
+than scanned humans or motion capture. Ragdolls reuse this exact mesh hierarchy.

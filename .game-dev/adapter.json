@@ -99,6 +99,31 @@
         "path": "staging/capture.json",
         "format": "game-dev-capture-v1"
       }
+    },
+    {
+      "id": "athlete-animation",
+      "title": "Athlete models, planted gait and physical action poses",
+      "description": "One bounded rendered sequence: both teams, turns, dribbling, kick, slide, hop and ragdoll recovery. No hardware input or full-match regression.",
+      "command": {
+        "arguments": [
+          "athletes"
+        ],
+        "runtime": "node",
+        "workingDirectory": ".",
+        "executable": "tools/visual_scene_check.mjs"
+      },
+      "timeoutSeconds": 60,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }

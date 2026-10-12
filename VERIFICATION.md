@@ -264,3 +264,22 @@ capture verification checked the final artifact rosters and hashes.
 Physical controller feel, longer match balance and recovery in every possible
 crowd arrangement remain human-playtest work. The rebuilt desktop executable is
 ready. This update is committed locally; it has not been pushed to GitHub.
+
+## Athlete models and animation - 2026-10-12
+
+Approved correction, build clean. One `athlete-animation` rendered sequence passed
+all 50 checks and saved 37 frames in
+`run_1791817083312_075d89a8b6a445c7befeba232bbdcf09`. Closed capture roster and
+hashes verified. Reviewed model, running, dribble, fall and recovered-model frames:
+limb surfaces are solid after correcting winding, outward normals and end caps.
+Both teams show ground-height stance samples and elevated swing samples; physical
+boot dribble/kick contact, hop landing and ragdoll recovery passed. The fall case
+uses the production impact receiver with a supplied impulse, not a complete
+player-to-player tackle. Full-match regression and hardware controller feel were
+not tested in this pass. Procedural geometry and gait remain stylized.
+
+The earlier run `run_1791814374134_ab849da72bb24a1dab41cb7f4f6784a3` failed its
+dribble check and showed open/inverted limb surfaces. Evidence was preserved and
+work stopped for user approval. Its fixture called `dribble()` without selecting
+the eligible controller; the corrected fixture calls production `_control_ball()`.
+No ball-contact thresholds or gameplay impulses were relaxed to obtain a pass.
