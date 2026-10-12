@@ -38,6 +38,8 @@ func _ready() -> void:
 	var human_motion_acceptance := "--human-motion-acceptance" in OS.get_cmdline_user_args()
 	var teamplay_acceptance := "--teamplay-acceptance" in OS.get_cmdline_user_args()
 	var contact_play_acceptance := "--contact-play-acceptance" in OS.get_cmdline_user_args()
+	var core_handling_acceptance := "--core-handling-acceptance" in OS.get_cmdline_user_args()
+	contact_play_acceptance = contact_play_acceptance or core_handling_acceptance
 	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance or teamplay_acceptance or contact_play_acceptance
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
@@ -76,7 +78,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/core_handling_acceptance.gd" if core_handling_acceptance else "res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -373,6 +375,7 @@ func _physics_process(delta: float) -> void:
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
+	controlled.try_buffered_kick(ball)
 	_check_goal()
 	# This is a visible dead-ball restart for an escape over the low boards.
 	if absf(ball.global_position.z) > 13.2 or absf(ball.global_position.x) > 21 or ball.global_position.y < -1:
@@ -408,7 +411,7 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		return
 	# Context is selected at button-down. Losing contact during a wind-up can miss.
 	if pressed.get("primary", false):
-		if _attacking_contact():
+		if _attacking_contact() or controlled.incoming_pass_remaining > 0:
 			charging = true
 			charge = 0
 		else:
@@ -431,7 +434,10 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			if kind == "chip":
 				controlled.loft(ball, shot_direction, lerpf(5, 15, charge), false, kind)
 			else:
-				controlled.kick(ball, shot_direction, lerpf(16, 30, charge) if kind == "power" else lerpf(10, 19, charge) if kind in ["finesse", "outside"] else lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), kind)
+				var strength := lerpf(16, 30, charge) if kind == "power" else lerpf(10, 19, charge) if kind in ["finesse", "outside"] else lerpf(12, 23, charge)
+				var lift := lerpf(0.7, 3.2, charge)
+				if not controlled.kick(ball, shot_direction, strength, lift, kind) and controlled.incoming_pass_remaining > 0:
+					controlled.buffer_kick(kind, shot_direction, strength, lift)
 			charging = false
 			charge = 0
 			controlled.shot_preparation = 0
@@ -444,6 +450,8 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			controlled.slide(ball)
 	if pressed.get("pass", false) and _attacking_contact():
 		controlled.kick(ball, shot_direction, 10.5, 0.12, "pass")
+	elif pressed.get("pass", false) and controlled.incoming_pass_remaining > 0:
+		controlled.buffer_kick("pass", shot_direction, 10.5, 0.12)
 	if pressed.get("through", false) and _attacking_contact():
 		var direction := shot_direction
 		var receiver: FootballPlayer = null

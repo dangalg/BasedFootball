@@ -1,6 +1,11 @@
 extends Node
 
 const SECONDS := 30.0
+var checkpoint := 0
+var fixture_checks: Dictionary = {}
+var fixture_frames: Array[String] = []
+var fixture_observations: Array = []
+var stop_trace: Array = []
 var game: Node3D
 var movement := Vector2.ZERO
 var sprinting := false
@@ -23,12 +28,26 @@ var running_samples := [0, 0]
 var backwards_samples := [0, 0]
 var ai_intervals: Dictionary = {}
 var previous_ai_timers: Dictionary = {}
+var possession: Dictionary = {}
+var episodes: Array = []
+var control_samples: Array = []
+var recent_contacts: Dictionary = {}
+var sample_remaining := 0.0
+var missing_since := -1.0
+var missing_snapshot: Dictionary = {}
+var last_frame: Image
+var before_loss_frame: Image
+var missed_windows := 0
+var window_seen := false
+var previous_swing_elapsed := 0.0
 
 func begin(match_node: Node3D) -> void:
 	game = match_node
 	for i in range(game.players.size()):
 		game.players[i].ai_rng.seed = 81011 + i
 		game.players[i].ai_style = game.players[i].ai_rng.randf_range(0.25, 0.75)
+		game.players[i].dribble_contact.connect(_observe_touch.bind(game.players[i]))
+		game.players[i].strike_contact.connect(_observe_strike.bind(game.players[i]))
 	evidence_dir = OS.get_environment("BASED_FOOTBALL_EVIDENCE")
 	# Start with the opposing kickoff so a home-dominated opening cannot leave
 	# their possession path unexercised. Subsequent play follows normal rules.
@@ -113,6 +132,7 @@ func _physics_process(delta: float) -> void:
 	if game == null:
 		return
 	elapsed += delta
+	_track_possession(delta)
 	if sprinting:
 		sprint_seconds += delta
 	for player in game.players:
@@ -139,6 +159,7 @@ func _physics_process(delta: float) -> void:
 
 func _finish() -> void:
 	set_physics_process(false)
+	_end_possession("test_end", {})
 	var touches := [0, 0]
 	var kicks := 0
 	var ai_actions := 0
@@ -162,6 +183,14 @@ func _finish() -> void:
 		"both_teams_face_running_motion": running_samples[0] > 100 and running_samples[1] > 100 and float(backwards_samples[0]) / running_samples[0] < 0.03 and float(backwards_samples[1]) / running_samples[1] < 0.03,
 		"live_match_frames_saved": screenshots.size() >= 7
 	}
+	if checkpoint == 1:
+		# Offensive AI quality belongs to checkpoint three; record its touch
+		# count here without making it the acceptance gate for handling.
+		checks.erase("both_teams_make_physical_touches")
+	checks.merge(fixture_checks)
+	screenshots.append_array(fixture_frames)
+	checks["possession_diagnostic_sampled"] = control_samples.size() > 300
+	checks["physical_possession_observed"] = episodes.size() > 0
 	var passed := true
 	for value in checks.values():
 		passed = passed and bool(value)
@@ -171,7 +200,111 @@ func _finish() -> void:
 	report["backwards_running_samples"] = backwards_samples
 	report["AI_reaction_intervals"] = ai_intervals.keys()
 	report["AI_seed_base"] = 81011
+	report["possession_episodes"] = episodes
+	report["checkpoint"] = checkpoint
+	report["fixture_observations"] = fixture_observations
+	report["stop_trace"] = stop_trace
+	report["control_samples"] = control_samples
+	report["missed_dribble_contact_windows"] = missed_windows
+	report["diagnostic_definition"] = "Episodes begin with an actual dribble contact within 0.95 m, or a recent such contact when selected. Escape means gap above 1.2 m for 0.15 s. Actual kicks, teammate handoffs, selection changes and restarts are excluded from losses. Opponent proximity is context, not proof of a challenge."
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()
 	print("DECISION_SESSION_RESULT: " + JSON.stringify(report))
 	get_tree().quit(0 if passed else 1)
+
+func _observe_touch(player: FootballPlayer) -> void:
+	recent_contacts[player.player_id] = elapsed
+	if player == game.controlled and possession.is_empty():
+		_start_possession(player)
+
+func _observe_strike(kind: String, player: FootballPlayer) -> void:
+	recent_contacts.erase(player.player_id)
+	if not possession.is_empty() and possession.actor == player.player_id:
+		_end_possession("intentional_" + kind, _snapshot(player))
+
+func _start_possession(player: FootballPlayer) -> void:
+	possession = {"actor": player.player_id, "start": elapsed, "start_contacts": player.completed_dribble_contacts, "sprint_seconds": 0.0, "turn_samples": 0, "max_gap": 0.0}
+	missing_since = -1
+	missing_snapshot = {}
+	before_loss_frame = null
+
+func _snapshot(player: FootballPlayer) -> Dictionary:
+	var offset: Vector3 = game.ball.global_position - player.global_position
+	offset.y = 0
+	var velocity := Vector3(player.linear_velocity.x, 0, player.linear_velocity.z)
+	var relative := Vector3(game.ball.linear_velocity.x, 0, game.ball.linear_velocity.z) - velocity
+	var opponent_gap := INF
+	var colliding: Array[String] = []
+	for other in game.players:
+		if other.team != player.team:
+			opponent_gap = minf(opponent_gap, other.global_position.distance_to(player.global_position))
+	for body in player.get_colliding_bodies():
+		if body is FootballPlayer and body.team != player.team:
+			colliding.append(body.player_id)
+	var boot: Node3D = player.visual_controller.right_boot if player.dribble_right else player.visual_controller.left_boot
+	return {"seconds": elapsed, "actor": player.player_id, "gap": offset.length(), "relative_speed": relative.length(), "outward_speed": relative.dot(offset.normalized()), "player_speed": velocity.length(), "ball_speed": game.ball.linear_velocity.length(), "ball_height": game.ball.global_position.y, "player_position": str(player.global_position), "ball_position": str(game.ball.global_position), "sprint": sprinting, "intent": str(player.intent), "turn_angle": acos(clampf(player.intent.normalized().dot(offset.normalized()), -1, 1)), "nearest_opponent": opponent_gap, "opponent_collisions": colliding, "ball_owner": game.ball.last_touch_id, "eligible": player.can_control(game.ball), "candidate": game.ball.control_candidate_id, "swing_active": player.dribble_active, "swing_elapsed": player.dribble_elapsed, "swing_hit": player.dribble_has_hit, "swing_contact_time": player.dribble_contact_time, "boot_gap": boot.global_position.distance_to(game.ball.global_position), "technique": player.dribble_technique, "action": player.action_kind, "kick_cooldown": player.kick_cooldown, "control_block": game.ball.control_block_remaining}
+
+func _track_possession(delta: float) -> void:
+	var player: FootballPlayer = game.controlled
+	var snapshot := _snapshot(player)
+	if player.dribble_elapsed < previous_swing_elapsed or not player.dribble_active:
+		window_seen = false
+	if player.dribble_active and not player.dribble_has_hit and not window_seen and player.dribble_elapsed > player.dribble_contact_time + 0.055:
+		missed_windows += 1
+		window_seen = true
+	previous_swing_elapsed = player.dribble_elapsed
+	sample_remaining -= delta
+	if sample_remaining <= 0:
+		sample_remaining = 0.05
+		control_samples.append(snapshot)
+		# Retain only one recent raster; save it if an escape starts.
+		last_frame = get_viewport().get_texture().get_image()
+	if possession.is_empty():
+		if game.ball.last_touch_id == player.player_id and snapshot.gap <= FootballPlayer.CONTROL_REACH and elapsed - float(recent_contacts.get(player.player_id, -10)) < 0.3:
+			_start_possession(player)
+		return
+	if possession.actor != player.player_id:
+		_end_possession("selection_change", snapshot)
+		return
+	if game.kickoff_remaining > 0:
+		_end_possession("restart", snapshot)
+		return
+	possession.max_gap = maxf(possession.max_gap, snapshot.gap)
+	if sprinting:
+		possession.sprint_seconds += delta
+	if snapshot.turn_angle > 0.7:
+		possession.turn_samples += 1
+	if game.ball.last_touch_id != player.player_id:
+		_end_possession("opponent_touch" if game.ball.last_touch_team != player.team else "teammate_handoff", snapshot)
+	elif snapshot.gap > 1.2:
+		if missing_since < 0:
+			missing_since = elapsed
+			missing_snapshot = snapshot
+			before_loss_frame = last_frame
+		if elapsed - missing_since >= 0.15:
+			_end_possession("ball_escape", snapshot)
+	else:
+		missing_since = -1
+
+func _end_possession(reason: String, snapshot: Dictionary) -> void:
+	if possession.is_empty():
+		return
+	possession["end"] = elapsed
+	possession["duration"] = elapsed - possession.start
+	possession["reason"] = reason
+	possession["loss_start"] = missing_snapshot
+	possession["end_state"] = snapshot
+	if reason in ["ball_escape", "opponent_touch"]:
+		var stem := "loss_%02d" % episodes.size()
+		if before_loss_frame != null:
+			var before_name := stem + "_before.png"
+			if before_loss_frame.save_png(evidence_dir.path_join(before_name)) == OK:
+				screenshots.append(before_name)
+		var after_name := stem + "_after.png"
+		if get_viewport().get_texture().get_image().save_png(evidence_dir.path_join(after_name)) == OK:
+			screenshots.append(after_name)
+	episodes.append(possession)
+	possession = {}
+	missing_since = -1
+	missing_snapshot = {}
+	before_loss_frame = null

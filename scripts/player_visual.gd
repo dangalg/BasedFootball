@@ -252,7 +252,7 @@ func animate(player: Node3D, delta: float) -> void:
 		_gait_foot(player, false, fposmod(player.step_phase / TAU, 1), local_velocity)
 		_gait_foot(player, true, fposmod(player.step_phase / TAU + 0.5, 1), local_velocity)
 	if kicking or standing or rising:
-		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
+		_pose_foot(player, not player.kick_right if kicking else false, player.global_position + player.body_visual.basis * Vector3(-0.12 if not kicking or player.kick_right else 0.12, 0.075, 0.04))
 	elif touching:
 		var support_side := -0.12 if player.dribble_right else 0.12
 		_pose_foot(player, not player.dribble_right, player.global_position + player.body_visual.basis * Vector3(support_side, 0.075, 0.04), touch_weight)
@@ -265,14 +265,14 @@ func animate(player: Node3D, delta: float) -> void:
 		_pose_foot(player, true, player.global_position + player.action_direction * lerpf(0.12, 0.68, extension) + Vector3.UP * 0.095)
 	elif player.action_kind == "kick":
 		var contact: Vector3 = player.global_position + player.kick_target_offset
-		var backswing: Vector3 = player.global_position - player.action_direction * 0.26 + player.action_direction.cross(Vector3.UP) * 0.105 + Vector3.UP * 0.18
+		var backswing: Vector3 = player.global_position - player.action_direction * 0.26 + player.action_direction.cross(Vector3.UP) * (0.105 if player.kick_right else -0.105) + Vector3.UP * 0.18
 		var target: Vector3
 		if player.action_elapsed <= player.kick_contact_time:
 			target = backswing.lerp(contact, smoothstep(0, player.kick_contact_time, player.action_elapsed))
 		else:
 			var follow := smoothstep(player.kick_contact_time, player.action_duration, player.action_elapsed)
 			target = contact + player.action_direction * 0.22 * follow + Vector3.UP * 0.24 * follow
-		_pose_foot(player, true, target)
+		_pose_foot(player, player.kick_right, target)
 		if player.kick_kind in ["shot", "finesse", "outside", "power", "chip"]:
 			_shot_pose(player)
 		# Toe and swing follow requested aim, independently of the head/body facing.
@@ -286,7 +286,8 @@ func animate(player: Node3D, delta: float) -> void:
 		if player.dribble_elapsed > player.dribble_contact_time:
 			var follow := smoothstep(player.dribble_contact_time, player.dribble_duration, player.dribble_elapsed)
 			offset += player.dribble_follow_direction * 0.12 * follow + Vector3.UP * sin(follow * PI) * 0.06
-		_pose_foot(player, player.dribble_right, player.global_position + offset, touch_weight)
+		# Approach the endpoint without applying a second easing weight.
+		_pose_foot(player, player.dribble_right, player.global_position + offset, 1.0 if not player.dribble_has_hit else touch_weight)
 	if player.hop_active:
 		_jump_pose(player)
 	if player.action_kind in ["push", "grab"]:
@@ -346,7 +347,7 @@ func animate(player: Node3D, delta: float) -> void:
 		head_pivot.position = head_rest
 	_finish_feet(player)
 	if strike_toe:
-		right_boot.global_basis = Basis(Vector3.UP, strike_toe_angle)
+		player.strike_boot().global_basis = Basis(Vector3.UP, strike_toe_angle)
 	elif touching:
 		var boot: Node3D = right_boot if player.dribble_right else left_boot
 		if player.dribble_technique == "trap":
@@ -405,7 +406,7 @@ func _shot_pose(player: Node3D) -> void:
 	var contact_time: float = player.kick_contact_time
 	var coil_end := contact_time * 0.62
 	var contact: Vector3 = player.global_position + player.kick_target_offset
-	var back: Vector3 = player.global_position - player.action_direction * (0.36 + player.kick_power * 0.12) + player.action_direction.cross(Vector3.UP) * 0.13 + Vector3.UP * 0.42
+	var back: Vector3 = player.global_position - player.action_direction * (0.36 + player.kick_power * 0.12) + player.action_direction.cross(Vector3.UP) * (0.13 if player.kick_right else -0.13) + Vector3.UP * 0.42
 	if player.kick_kind == "chip":
 		back = player.global_position - player.action_direction * 0.18 + Vector3.UP * 0.12
 	var target: Vector3
@@ -419,8 +420,8 @@ func _shot_pose(player: Node3D) -> void:
 		var settle := smoothstep(contact_time + 0.19, player.action_duration, time)
 		target = target.lerp(player.body_visual.to_global(Vector3(0.105, 0.075, -0.10)), settle)
 	var plant_blend := smoothstep(0, coil_end, time)
-	_pose_foot(player, false, player.kick_plant_start.lerp(player.kick_plant_world, plant_blend))
-	_pose_foot(player, true, target)
+	_pose_foot(player, not player.kick_right, player.kick_plant_start.lerp(player.kick_plant_world, plant_blend))
+	_pose_foot(player, player.kick_right, target)
 
 func _limit_rotation(previous: Quaternion, target: Quaternion, max_angle: float) -> Quaternion:
 	var angle := previous.angle_to(target)
