@@ -114,3 +114,19 @@ running, turns, control touches, a kick, slide, hop and physical fall/recovery.
 It saves match-camera and close-up frames. Automated checks establish contact,
 finite transforms, ground-height steps and recovery; inspect the frames for
 artistic quality. It is not a complete match or hardware controller test.
+
+## Skinned shot evaluation
+
+`scripts/skinned_athlete.gd` constructs original weighted mesh surfaces locally;
+no provider jobs, licenses, Blender export or network assets are needed.
+`skinned-shot` runs one finite rendered sequence covering model pose, locomotion,
+dribble contact, weak/strong/moving/missed shots and ragdoll recovery. It checks
+normalized weights, blended joints, the baked boot against its contact anchor,
+contact timing and charged-shot power. Saved frames supply visual review;
+hardware controller feel and full-match balance remain human evaluation.
+
+The contact-first matrix adds 24 reachable shots (standing, walking, sprinting and
+turning; two powers and three offsets) plus four physically deflected misses.
+Acceptance is at least 95 percent reachable contacts with all deflections missing.
+Ball speeds are sampled after the following physics step. Baked boot vertices are
+compared to their expected bone transforms after the completed render frame.

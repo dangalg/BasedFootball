@@ -111,3 +111,25 @@ ground-height stance phase and a lifted swing phase through the same leg IK used
 by action contacts. Acceleration adds bounded torso lean; kicks add torso rotation
 and supporting-arm poses. These remain procedural models and animation, rather
 than scanned humans or motion capture. Ragdolls reuse this exact mesh hierarchy.
+
+## First skinned athlete and shot
+
+Ari is the first skinned athlete: original runtime-generated limb tubes have
+blended weights around knees and elbows, bound to a 13-bone Skeleton3D. Existing
+pose anchors drive those bones and physical boot contact; ragdoll body transforms
+drive the same skin during falls and recovery. Other players retain their previous
+models while this first athlete is evaluated. This is an original procedural rig,
+not a downloaded or motion-captured character.
+
+Holding Circle adds a visible torso preparation. Release starts a supporting-foot
+plant, bent-knee backswing, fast strike and extended follow-through. Stronger
+shots take a slightly longer wind-up (0.17 to 0.22 seconds). Both teams use the
+same shot poses and physical contact rules. Swept boot speed and contact distance
+affect impulse transfer; requested lift supplies bounded off-centre contact spin.
+The ball remains free and an out-of-reach wind-up can miss.
+
+Shot preparation now re-estimates a world-space ball intercept until the final
+swing commits. The player retains physical run-up momentum until contact rather
+than braking at release. The supporting foot steps toward the estimated plant;
+a late deflection can still remove the ball from the committed swing. Ball
+position, collision radius and hit tolerance are unchanged.

@@ -283,3 +283,36 @@ dribble check and showed open/inverted limb surfaces. Evidence was preserved and
 work stopped for user approval. Its fixture called `dribble()` without selecting
 the eligible controller; the corrected fixture calls production `_control_ball()`.
 No ball-contact thresholds or gameplay impulses were relaxed to obtain a pass.
+
+## First skinned athlete and contact-first shots - 2026-10-12
+
+Build clean. One approved `skinned-shot` behavioral sequence passed in
+`run_1791820187843_ca0cad511fd54d9ab2ff3d7dcc51e30e`: 253 checks, including
+188 successful capture writes. All 24 reachable shots connected across standing,
+walking, sprinting and turning, two powers and three ball offsets; four late
+physical deflections missed. This is a bounded contact matrix, not a claim of
+100 percent success in ordinary matches. Other checks covered dribble contact,
+normalized skin weights, blended joints, hop landing and ragdoll recovery.
+
+Weak and strong shots measured 12.2905 and 24.0147 m/s after the next physics
+step. The maximum completed-frame skinned boot vertex error relative to its
+contact bone was 0.000000964 m. Reviewed sprint/turn contact, strong-shot
+follow-through, fall and recovery frames. Capture contract, closed artifact
+roster and hashes verified. No contact-radius tolerance was expanded.
+
+Ari alone uses the new original runtime-generated weighted mesh and 13-bone rig.
+Shot poses and physical rules apply equally to both teams. This is procedural
+skinning with connected limb rings and existing head/kit detail, not a scanned
+human or imported animation library. Full-match balance, every opponent-contact
+arrangement, airborne shots, controller feel and subjective shot quality remain
+unverified in this pass. The supporting foot can exceed anatomical reach in
+unusual cross-direction shots; the rendered output is retained for evaluation.
+
+Previous evidence is preserved: `run_1791818472612_97310ddca48a4d6e8d6096cf35e27019`
+failed before the fixture loaded due to a type declaration (no intended behavior
+exercised). `run_1791818522292_b79cdba699c54adb8f3fc36f6334913a` exercised shots
+but failed immediate impulse-speed and same-tick baked-boot checks. Work stopped
+for an approved revised plan. User play also reported frequent kick misses.
+Preparation now updates its ball intercept, the final swing commits in world
+space and physical run-up momentum is retained until the strike. Measurements
+now use the following physics step and completed render frame.

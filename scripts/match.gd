@@ -33,6 +33,8 @@ func _ready() -> void:
 	var decision_acceptance := "--decision-acceptance" in OS.get_cmdline_user_args()
 	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
 	var athlete_acceptance := "--athlete-acceptance" in OS.get_cmdline_user_args()
+	var skinned_shot_acceptance := "--skinned-shot-acceptance" in OS.get_cmdline_user_args()
+	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
 	acceptance = impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
@@ -68,7 +70,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -263,6 +265,7 @@ func reset_positions(kickoff_team: int) -> void:
 func _select(index: int) -> void:
 	if controlled != null:
 		controlled.jockey = false
+		controlled.shot_preparation = 0
 	selected_index = clampi(index, 0, 2)
 	controlled = players[selected_index]
 	for player in players:
@@ -375,10 +378,14 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 				controlled.tackle(ball)
 	if charging:
 		charge = minf(1, charge + delta / 0.8)
+		controlled.shot_preparation = charge
 		if pressed.get("primary_release", false):
 			controlled.kick(ball, controlled.aim, lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), "shot")
 			charging = false
 			charge = 0
+			controlled.shot_preparation = 0
+	else:
+		controlled.shot_preparation = 0
 	if pressed.get("square", false):
 		if _attacking_contact():
 			controlled.kick(ball, controlled.aim, 12.5, 5.2, "lob")

@@ -13,6 +13,7 @@ var left_boot: Node3D
 var head_pivot: Node3D
 var gait_blend := 0.0
 var previous_velocity := Vector3.ZERO
+var skinned: FootballSkinnedAthlete
 
 func build(player: Node3D) -> void:
 	player.body_visual = Node3D.new()
@@ -120,6 +121,9 @@ func build(player: Node3D) -> void:
 	player.name_label.pixel_size = 0.009
 	player.name_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	player.name_label.no_depth_test = true
+	if player.player_id == "ari":
+		skinned = FootballSkinnedAthlete.new()
+		skinned.build(player, self)
 
 func animate(player: Node3D, delta: float) -> void:
 	var previous_leg_rotation: Quaternion = player.right_leg.quaternion
@@ -213,6 +217,8 @@ func animate(player: Node3D, delta: float) -> void:
 			var follow := smoothstep(player.kick_contact_time, player.action_duration, player.action_elapsed)
 			target = contact + player.action_direction * 0.22 * follow + Vector3.UP * 0.24 * follow
 		_pose_foot(player, true, target)
+		if player.kick_kind == "shot":
+			_shot_pose(player)
 	elif touching:
 		var swing := smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
@@ -229,6 +235,13 @@ func animate(player: Node3D, delta: float) -> void:
 		left_arm.rotation.x = -0.25
 		right_arm.rotation.x = 0.35
 		upper_body.rotation.y = sin(clampf(player.action_elapsed / player.action_duration, 0, 1) * PI) * -0.18
+		if player.kick_kind == "shot":
+			var preparation := smoothstep(0, player.kick_contact_time * 0.65, player.action_elapsed)
+			var strike := smoothstep(player.kick_contact_time * 0.65, player.kick_contact_time + 0.12, player.action_elapsed)
+			upper_body.rotation.y = lerpf(0.4 * preparation, -0.42, strike)
+			upper_body.rotation.x -= 0.10 * strike
+			left_arm.rotation = Vector3(-0.15 - 0.5 * preparation, 0, -0.65)
+			right_arm.rotation = Vector3(0.65 - strike * 1.2, 0, 0.35)
 	else:
 		upper_body.rotation.y = lerpf(upper_body.rotation.y, sin(player.step_phase) * stride * 0.09, minf(1, delta * 10))
 	if player.stagger_remaining > 0:
@@ -245,6 +258,31 @@ func animate(player: Node3D, delta: float) -> void:
 		# the smoothed boot, so smoothing cannot manufacture an invisible touch.
 		player.right_leg.quaternion = _limit_rotation(previous_leg_rotation, player.right_leg.quaternion, delta * 18)
 		right_knee.quaternion = _limit_rotation(previous_knee_rotation, right_knee.quaternion, delta * 18)
+	if player.shot_preparation > 0 and not kicking and not sliding:
+		upper_body.rotation.y = 0.25 * player.shot_preparation
+		upper_body.rotation.x -= 0.12 * player.shot_preparation
+	if skinned != null:
+		skinned.sync()
+
+func _shot_pose(player: Node3D) -> void:
+	var time: float = player.action_elapsed
+	var contact_time: float = player.kick_contact_time
+	var coil_end := contact_time * 0.62
+	var contact: Vector3 = player.global_position + player.kick_target_offset
+	var back: Vector3 = player.body_visual.to_global(Vector3(0.13, 0.42, 0.36 + player.kick_power * 0.12))
+	var target: Vector3
+	if time < coil_end:
+		target = player.kick_start_boot.lerp(back, smoothstep(0, coil_end, time))
+	elif time <= contact_time:
+		target = back.lerp(contact, pow(clampf((time - coil_end) / (contact_time - coil_end), 0, 1), 1.65))
+	else:
+		var follow := smoothstep(contact_time, contact_time + 0.15, time)
+		target = contact + player.action_direction * (0.22 + player.kick_power * 0.09) * follow + Vector3.UP * 0.40 * follow
+		var settle := smoothstep(contact_time + 0.19, player.action_duration, time)
+		target = target.lerp(player.body_visual.to_global(Vector3(0.105, 0.075, -0.10)), settle)
+	var plant_blend := smoothstep(0, coil_end, time)
+	_pose_foot(player, false, player.kick_plant_start.lerp(player.kick_plant_world, plant_blend))
+	_pose_foot(player, true, target)
 
 func _limit_rotation(previous: Quaternion, target: Quaternion, max_angle: float) -> Quaternion:
 	var angle := previous.angle_to(target)

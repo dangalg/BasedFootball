@@ -58,6 +58,17 @@ var kick_lift: float = 0.0
 var kick_kind: String = "pass"
 var kick_target_offset := Vector3.ZERO
 var kick_contact_time: float = 0.0
+var kick_power := 0.0
+var kick_start_boot := Vector3.ZERO
+var kick_plant_world := Vector3.ZERO
+var kick_plant_start := Vector3.ZERO
+var kick_target_world := Vector3.ZERO
+var kick_run_velocity := Vector3.ZERO
+var kick_committed := false
+var shot_preparation := 0.0
+var strike_delta := 1.0 / 120.0
+var last_strike_speed := 0.0
+var last_strike_quality := 0.0
 var last_boot_world := Vector3.ZERO
 var completed_kicks: int = 0
 var last_kick_contact_distance: float = 0.0
@@ -114,6 +125,7 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	strike_delta = delta
 	hop_cooldown = maxf(0, hop_cooldown - delta)
 	if ragdoll != null:
 		ring.visible = selected
@@ -139,6 +151,8 @@ func _physics_process(delta: float) -> void:
 	control_stride_remaining = maxf(0.0, control_stride_remaining - delta)
 	if action_kind != "":
 		action_elapsed += delta
+		if action_kind == "kick" and not action_has_hit:
+			_update_kick_target()
 	if dribble_active:
 		dribble_elapsed += delta
 		if not dribble_has_hit and is_instance_valid(dribble_ball) and can_control(dribble_ball):
@@ -178,7 +192,17 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if action_kind == "slide":
 		desired = action_direction * lerpf(7.0, 2.5, clampf(action_elapsed / action_duration, 0, 1))
 	elif action_kind == "kick":
-		desired *= 0.35
+		if not action_has_hit and action_elapsed <= kick_contact_time:
+			# Keep the run-up through the strike. Braking at button release made
+			# the free ball outrun the planted leg, especially during a sprint.
+			desired = kick_run_velocity
+			if is_instance_valid(action_ball):
+				var gap := action_ball.global_position - global_position
+				gap.y = 0
+				if gap.length() > 0.62:
+					desired += gap.normalized() * minf((gap.length() - 0.62) * 5, 2)
+		else:
+			desired *= 0.35
 	elif action_kind == "standing":
 		desired = action_direction * 1.8
 	elif action_kind == "shoulder":
@@ -268,23 +292,43 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	kick_kind = kind if kind != "" else ("shot" if strength >= 15.0 else "pass")
 	kick_strength = strength
 	kick_lift = lift
-	kick_contact_time = 0.14 if kick_kind == "shot" else 0.10
-	action_duration = 0.42 if kick_kind == "shot" else 0.32
+	kick_power = clampf((strength - 12) / 11, 0, 1)
+	kick_contact_time = lerpf(0.17, 0.22, kick_power) if kick_kind == "shot" else 0.10
+	action_duration = kick_contact_time + 0.36 if kick_kind == "shot" else 0.32
+	kick_start_boot = visual_controller.right_boot.global_position
+	kick_plant_start = visual_controller.left_boot.global_position
+	kick_plant_world = global_position - action_direction.cross(Vector3.UP) * 0.12 + action_direction * 0.08 + Vector3.UP * 0.075
+	kick_run_velocity = Vector3(linear_velocity.x, 0, linear_velocity.z)
+	kick_committed = false
+	shot_preparation = 0
 	action_elapsed = 0
 	action_ball = ball
 	action_has_hit = false
-	var relative_velocity := ball.linear_velocity - linear_velocity
-	kick_target_offset = ball.global_position - global_position + relative_velocity * kick_contact_time
-	kick_target_offset.y = clampf(kick_target_offset.y, 0.06, 0.55)
-	var horizontal := Vector3(kick_target_offset.x, 0, kick_target_offset.z).limit_length(0.76)
-	kick_target_offset.x = horizontal.x
-	kick_target_offset.z = horizontal.z
+	_update_kick_target()
 	kick_cooldown = action_duration + 0.10
 	close_control_remaining = 0.0
 	control_stride_remaining = 0
 	touch_cooldown = action_duration
 	last_boot_world = visual_controller.right_boot.global_position
 	return true
+
+func _update_kick_target() -> void:
+	if not is_instance_valid(action_ball):
+		return
+	if not kick_committed:
+		var time_left := maxf(0, kick_contact_time - action_elapsed)
+		var velocity := action_ball.linear_velocity
+		# Re-plan only the preparation from current visible physics state. The
+		# final swing commits; collisions after commitment can still cause misses.
+		kick_target_world = action_ball.global_position + velocity * time_left
+		if action_ball.global_position.y > FootballBall.RADIUS + 0.045:
+			kick_target_world.y -= 0.5 * 9.8 * time_left * time_left
+		kick_target_world.y = maxf(FootballBall.RADIUS, kick_target_world.y)
+		kick_plant_world = kick_target_world - action_direction * 0.48 - action_direction.cross(Vector3.UP) * 0.12
+		kick_plant_world.y = global_position.y + 0.075
+		kick_committed = action_elapsed >= kick_contact_time * 0.62
+	# Keep a committed WORLD target fixed when the player's physical root moves.
+	kick_target_offset = kick_target_world - global_position
 
 func can_control(ball: FootballBall) -> bool:
 	if kick_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0 or ball.control_block_remaining > 0.0 or not reach_ball(ball, CONTROL_REACH):
@@ -422,10 +466,19 @@ func _update_challenge() -> void:
 				var contact_distance := _boot_distance(action_ball.global_position, last_boot_world, boot_world)
 				if contact_distance <= FootballBall.RADIUS + 0.095:
 					var target := action_direction * kick_strength + Vector3.UP * kick_lift
+					last_strike_speed = maxf(0, ((boot_world - last_boot_world) / maxf(strike_delta, 0.001) - linear_velocity).dot(action_direction))
+					last_strike_quality = 1.0
+					if kick_kind == "shot":
+						# Swing speed and how centrally the swept boot meets the ball
+						# affect the strike. No impulse without the visible boot contact.
+						last_strike_quality = lerpf(1.0, 0.78, clampf(contact_distance / (FootballBall.RADIUS + 0.095), 0, 1))
+						var transfer := clampf(last_strike_speed / 15.0, 0.75, 1.12) * last_strike_quality
+						target *= transfer
 					var incoming := action_ball.linear_velocity
 					# Preserve part of incoming motion instead of replacing the trajectory.
 					var impulse := (target - incoming * 0.85) * action_ball.mass
-					action_ball.touch(team, player_id, impulse, Vector3(0, -FootballBall.RADIUS * 0.35, 0))
+					var contact_offset := Vector3(0, -FootballBall.RADIUS * clampf(kick_lift / 7, 0.04, 0.35), 0)
+					action_ball.touch(team, player_id, impulse, contact_offset)
 					action_ball.control_block_remaining = 0.3
 					action_has_hit = true
 					completed_kicks += 1
@@ -500,6 +553,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	shot_preparation = 0
 	if ragdoll != null:
 		ragdoll.finish(true)
 	getting_up = false

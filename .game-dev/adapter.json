@@ -124,6 +124,31 @@
         "path": "staging/capture.json",
         "format": "game-dev-capture-v1"
       }
+    },
+    {
+      "id": "skinned-shot",
+      "title": "First skinned athlete and full-body physical shot",
+      "description": "One finite model, locomotion, dribble, weak/charged/moving/missed shot and ragdoll sequence.",
+      "command": {
+        "arguments": [
+          "skinned-shot"
+        ],
+        "runtime": "node",
+        "workingDirectory": ".",
+        "executable": "tools/visual_scene_check.mjs"
+      },
+      "timeoutSeconds": 100,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }

@@ -18,6 +18,7 @@ var original_mask: int
 var finished := false
 var recover_origin := Vector3.ZERO
 var recover_target := Vector3.ZERO
+var skinned: FootballSkinnedAthlete
 
 func begin(player: FootballPlayer, impulse: Vector3, contact: Vector3) -> void:
 	actor = player
@@ -26,6 +27,8 @@ func begin(player: FootballPlayer, impulse: Vector3, contact: Vector3) -> void:
 	clone = actor.body_visual.duplicate() as Node3D
 	add_child(clone)
 	clone.global_transform = actor.body_visual.global_transform
+	if actor.visual_controller.skinned != null:
+		skinned = actor.visual_controller.skinned.bind_clone(clone)
 	var visual: FootballPlayerVisual = actor.visual_controller
 	var upper := _copy(visual.upper_body)
 	var head := _copy(visual.head_pivot)
@@ -131,10 +134,14 @@ func _physics_process(delta: float) -> void:
 			mesh.global_transform = target.start.interpolate_with(source.global_transform, blend)
 		if blend >= 1:
 			finish()
+		elif skinned != null:
+			skinned.sync()
 		return
 	# Keep selection, camera and nearby-player logic at the physical body.
 	actor.global_position = Vector3(pelvis.global_position.x, 0.02, pelvis.global_position.z)
 	actor.reset_physics_interpolation()
+	if skinned != null:
+		skinned.sync()
 	var speed := 0.0
 	for body in bodies:
 		speed = maxf(speed, body.linear_velocity.length())
