@@ -138,3 +138,15 @@ The fixture drives the controlled player through current-state AI actions; it
 uses no hardware input. Artistic quality and hardware controller feel still
 require human play. Historical impact tests expect R1 hop; use this new R3 mapping
 when revising those fixtures rather than interpreting that old mapping as current.
+
+`human-motion` executes one finite sequence for all six athletes: walk, sprint,
+turn, stop, slide, hop, dribble and shot. It records low slide/recovery, jump
+preparation/tuck/extension/landing, foot clearance, bounded joint steps, physical
+ball contacts and unchanged AI random state/base pace. Captured frames support
+visual review for the skinned Ari and the remaining articulated models.
+
+The combined `human-motion` sequence also checks left/right-foot contacts for
+each athlete, turning/stopping control and absence of remote ball touches.
+The previous failed below-ground-foot evidence is retained separately.
+
+Verified local movement checkpoint: run_1791827288363_1191765ce15640dda94a0015edff488b passed 429/429 checks and saved 192 frames. Build clean; sealed capture hashes verified. Preparation uses planted ankle geometry, retaining the 80 ms physical launch. Controller feel remains human evaluation.

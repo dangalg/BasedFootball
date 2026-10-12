@@ -35,6 +35,8 @@ func _ready() -> void:
 	var athlete_acceptance := "--athlete-acceptance" in OS.get_cmdline_user_args()
 	var skinned_shot_acceptance := "--skinned-shot-acceptance" in OS.get_cmdline_user_args()
 	var shots_team_acceptance := "--shots-team-acceptance" in OS.get_cmdline_user_args()
+	var human_motion_acceptance := "--human-motion-acceptance" in OS.get_cmdline_user_args()
+	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
@@ -72,7 +74,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:

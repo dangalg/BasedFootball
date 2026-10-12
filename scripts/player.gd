@@ -88,12 +88,21 @@ var dribble_start_foot_offset := Vector3.ZERO
 var dribble_follow_direction := Vector3.RIGHT
 var dribble_turn_side := 1.0
 var completed_dribble_contacts := 0
+var dribble_right := true
+var last_dribble_right := false
+var dribble_technique := "push"
+var left_dribble_contacts := 0
+var right_dribble_contacts := 0
+var last_dribble_boot := Vector3.ZERO
 var balance_skill := 1.0
 var agility_skill := 1.0
 var hop_active := false
 var hop_elapsed := 0.0
 var hop_cooldown := 0.0
 var hop_launched := false
+var hop_landing_remaining := 0.0
+var hop_landing_impact := 0.0
+var hop_previous_vertical := 0.0
 var ragdoll: FootballPlayerRagdoll
 var getting_up := false
 var slide_victims: Array[int] = []
@@ -130,6 +139,7 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	hop_landing_remaining = maxf(0, hop_landing_remaining - delta)
 	run_requested = maxf(0, run_requested - delta)
 	support_requested = maxf(0, support_requested - delta)
 	strike_delta = delta
@@ -147,7 +157,10 @@ func _physics_process(delta: float) -> void:
 			apply_central_impulse(Vector3.UP * mass * (3.9 + (agility_skill - 1) * 0.5))
 		if hop_launched and hop_elapsed > 0.28 and global_position.y < 0.10 and linear_velocity.y <= 0:
 			hop_active = false
+			hop_landing_remaining = 0.24
+			hop_landing_impact = clampf(absf(hop_previous_vertical) / 4, 0.3, 1)
 			physical_event.emit("land", {})
+		hop_previous_vertical = linear_velocity.y
 	kick_cooldown = maxf(0.0, kick_cooldown - delta)
 	tackle_cooldown = maxf(0.0, tackle_cooldown - delta)
 	touch_cooldown = maxf(0.0, touch_cooldown - delta)
@@ -168,6 +181,8 @@ func _physics_process(delta: float) -> void:
 			var time_to_contact := maxf(0, dribble_contact_time - dribble_elapsed)
 			dribble_target_offset = dribble_ball.global_position - global_position + (dribble_ball.linear_velocity - linear_velocity) * time_to_contact
 			dribble_target_offset.y = clampf(dribble_target_offset.y, 0.075, 0.28)
+			if dribble_technique == "trap":
+				dribble_target_offset.y += 0.05
 	active_seconds += delta
 	if sprint and intent.length_squared() > 0.1:
 		energy = maxf(0.0, energy - delta * 0.07 / stamina_trait)
@@ -224,8 +239,10 @@ func hop() -> bool:
 	if not upright_ready() or hop_cooldown > 0 or global_position.y > 0.12 or absf(linear_velocity.y) > 0.6:
 		return false
 	hop_active = true
+	visual_controller.begin_hop(self)
 	hop_launched = false
 	hop_elapsed = 0
+	hop_previous_vertical = 0
 	hop_cooldown = 1.15 / agility_skill
 	dribble_active = false
 	close_control_remaining = 0
@@ -381,29 +398,41 @@ func dribble(ball: FootballBall) -> bool:
 	if stick < 0.05 and player_velocity.length() < 0.12 and ball_velocity.length() < 0.12 and relative.length() > 0.45 and relative.length() < 0.75:
 		return false
 	dribble_active = true
+	var local_ball: Vector3 = body_visual.basis.inverse() * relative
+	if absf(local_ball.x) > 0.09:
+		dribble_right = local_ball.x > 0
+	else:
+		var left_distance := visual_controller.left_boot.global_position.distance_to(ball.global_position)
+		var right_distance := visual_controller.right_boot.global_position.distance_to(ball.global_position)
+		dribble_right = right_distance < left_distance - 0.08 if absf(left_distance - right_distance) > 0.08 else not last_dribble_right
+	var local_aim: Vector3 = body_visual.basis.inverse() * intent
+	dribble_technique = "trap" if stick < 0.05 else "inside" if turning and local_aim.x * (1 if dribble_right else -1) < 0 else "outside" if turning else "push"
 	dribble_elapsed = 0
 	dribble_duration = 0.16 if turning else (0.26 if sprint and energy > 0.05 else 0.22)
 	dribble_contact_time = 0.05 if turning else 0.065
 	dribble_has_hit = false
 	dribble_ball = ball
 	dribble_target_offset = ball.global_position - global_position + (ball.linear_velocity - linear_velocity) * dribble_contact_time
-	dribble_start_foot_offset = visual_controller.right_boot.global_position - global_position
+	var boot: Node3D = visual_controller.right_boot if dribble_right else visual_controller.left_boot
+	dribble_start_foot_offset = boot.global_position - global_position
 	dribble_target_offset.y = clampf(dribble_target_offset.y, 0.075, 0.28)
+	if dribble_technique == "trap":
+		dribble_target_offset.y += 0.05
 	dribble_follow_direction = intent.normalized() if stick > 0.05 else relative.normalized()
 	close_control_ball = ball
 	close_control_remaining = dribble_duration + 0.12
-	last_boot_world = visual_controller.right_boot.global_position
+	last_dribble_boot = boot.global_position
 	return false # Scheduling a swing is not a ball touch.
 
 func _update_dribble_contact() -> void:
 	if not dribble_active:
 		return
-	var boot_world: Vector3 = visual_controller.right_boot.global_position
+	var boot_world: Vector3 = visual_controller.right_boot.global_position if dribble_right else visual_controller.left_boot.global_position
 	if action_kind != "" or not is_instance_valid(dribble_ball) or stagger_remaining > 0 or recovery_remaining > 0:
 		dribble_active = false
 		return
 	if not dribble_has_hit and dribble_elapsed >= dribble_contact_time - 0.008 and dribble_elapsed <= dribble_contact_time + 0.055:
-		if dribble_ball.control_candidate_id == player_id and can_control(dribble_ball) and _boot_distance(dribble_ball.global_position, last_boot_world, boot_world) < FootballBall.RADIUS + 0.12:
+		if dribble_ball.control_candidate_id == player_id and can_control(dribble_ball) and _boot_distance(dribble_ball.global_position, last_dribble_boot, boot_world) < FootballBall.RADIUS + 0.12:
 			var relative := dribble_ball.global_position - global_position
 			relative.y = 0
 			var velocity := Vector3(linear_velocity.x, 0, linear_velocity.z)
@@ -437,9 +466,14 @@ func _update_dribble_contact() -> void:
 			dribble_follow_direction = target_velocity.normalized() if target_velocity.length() > 0.1 else contact_direction
 			control_stride_remaining = TOUCH_STRIDE_TIME
 			completed_dribble_contacts += 1
+			last_dribble_right = dribble_right
+			if dribble_right:
+				right_dribble_contacts += 1
+			else:
+				left_dribble_contacts += 1
 			match_touches += 1
 			dribble_contact.emit()
-	last_boot_world = boot_world
+	last_dribble_boot = boot_world
 	if dribble_elapsed >= dribble_duration:
 		dribble_active = false
 		touch_cooldown = 0
@@ -472,6 +506,7 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 	slide_victims.clear()
 	last_boot_world = visual_controller.right_boot.global_position
 	if kind == "slide":
+		visual_controller.begin_slide(self)
 		body_collider.shape.height = 0.8
 		body_collider.position.y = 0.43
 		apply_central_impulse(action_direction * mass * 2.0)
@@ -582,6 +617,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	hop_landing_remaining = 0
 	shot_preparation = 0
 	if ragdoll != null:
 		ragdoll.finish(true)

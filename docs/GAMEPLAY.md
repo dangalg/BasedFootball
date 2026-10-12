@@ -156,3 +156,24 @@ safety option. Passing considers lane clearance, receiver space and advancement;
 blocked lanes can produce lobs. AI seeks shooting opportunities and uses the same
 kick profiles as the controller. Bounded reaction/decision randomness remains;
 physical outcomes and launch rules are shared.
+
+## Human movement variation
+
+Each player has a repeatable cosmetic movement style with small cadence, arm
+swing and posture differences. Stride variation changes smoothly between cycles;
+breathing, weight shifts and looking toward the visible ball add idle movement.
+The cosmetic random generator is independent of AI decisions. Base pace, jump
+impulse and hit/fall rules are unchanged. Action feet retain physical-contact
+targets; arm and non-action leg rotations have bounded angular changes.
+
+Slides have an entry, low hip/extended tackling leg and tucked supporting leg,
+with balancing arms and a rising recovery. R3 hops crouch before the physical
+launch, tuck during ascent, extend during descent and compress on landing.
+Landing presentation uses actual fall speed without adding a control penalty.
+
+Dribble touches now select the reachable left or right boot from ball side,
+relative foot reach and recent touches, keeping that boot selected through its
+contact window. Inside/outside cuts orient the boot; stopping can raise the sole
+over the ball for a trap. The selected boot supplies the swept contact check.
+Foot endpoints are blended before leg IK, with a ground-height constraint,
+rather than independently interpolating joints through below-ground arcs.
