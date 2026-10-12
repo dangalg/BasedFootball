@@ -180,3 +180,7 @@ rather than independently interpolating joints through below-ground arcs.
 
 ## Active team play
 Automatic defensive switching prefers available goal-side cover. Manual right-stick switching retains direction selection. Pursuers reach legal board positions and attempt physical escape kicks. Successful passes assign a receiver to intercept the current trajectory; assignment expires or ends on another touch. Receiving uses a wider cushioning speed window but requires boot contact. Pressure near the home goal can prompt a clearance. No ball homing or score-dependent outcomes.
+
+## Physical contact play
+Square in defence commits a slide to its initial direction and momentum. Ground friction slows it; impact does not trigger renewed acceleration. The tackling boot can win the ball, clip legs, cause a balance-dependent stumble/fall, or miss a timed R3 hop. Recovery leaves an opening.
+Circle in defence pushes a nearby opponent or attempts a standing tackle. L2 + Circle attempts a brief grab; hold both buttons to maintain it, release either to let go. Visible hands must reach an opposing torso. Grabs apply capped equal-and-opposite spring/damping forces and break with separation, speed, a hop, a fall or low stamina. Duration is limited to 0.72 seconds. L2 + Circle remains an outside-foot shot in attack. Both teams share contact rules; AI varies occasional shove/grab choices. Keyboard equivalents are J and Ctrl + J, with H retaining shoulder challenges.

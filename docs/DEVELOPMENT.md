@@ -154,3 +154,7 @@ Verified local movement checkpoint: run_1791827288363_1191765ce15640dda94a0015ed
 The teamplay scenario checks side/end/corner recovery, goal-side switching, ground and lofted physical reception, missed pass assignment, pressure response and a bounded autonomous sequence. Rendered runs request an off-screen window.
 
 Verified teamplay checkpoint: run_1791827595948_0fb7c13f7c8742f5a4d2531c63cf4d09 passed all 34 checks; clean build and verified sealed hashes. Wall/corner recovery and physical ground/lob receiving succeeded in the bounded fixtures. Full-match balance and controller feel remain unverified.
+
+contact-play exercises a clean/missed committed slide, hard/glancing leg impact, hop clearance, contextual shove/standing fallback, physical shove reaction, grab tension, button release, movement break and unreachable misses. One finite rendered scenario, no hardware input.
+
+Verified contact checkpoint: run_1791827930291_c5fce8e4a70344fca2d05fe9b3a0eda6 passed 29/29 checks and saved 10 frames. Build clean and sealed hashes verified. The sequence observed hard-slide ragdoll, slow-impact stumble, hop clearance, opposing shove reactions, grab tension, release and physical break. Frames inspected; subjective presentation and hardware controller feel remain user evaluation.

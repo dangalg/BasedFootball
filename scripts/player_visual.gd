@@ -289,6 +289,15 @@ func animate(player: Node3D, delta: float) -> void:
 		_pose_foot(player, player.dribble_right, player.global_position + offset, touch_weight)
 	if player.hop_active:
 		_jump_pose(player)
+	if player.action_kind in ["push", "grab"]:
+		var reach := smoothstep(0, 0.13, player.action_elapsed)
+		var release := 1 - smoothstep(player.action_duration - 0.12, player.action_duration, player.action_elapsed)
+		var weight := reach * release
+		left_arm.rotation = Vector3(1.22 * weight, 0, -0.10)
+		right_arm.rotation = Vector3(1.22 * weight, 0, 0.10)
+		left_elbow.rotation.x = lerpf(0.6, 0.16, weight)
+		right_elbow.rotation.x = lerpf(0.6, 0.16, weight)
+		upper_body.rotation.x -= 0.12 * weight
 	if kicking:
 		left_arm.rotation.x = -0.25
 		right_arm.rotation.x = 0.35
@@ -362,7 +371,8 @@ func _slide_pose(player: Node3D) -> void:
 	var entry := smoothstep(0, 0.12, player.action_elapsed)
 	var direction: Vector3 = player.action_direction
 	var lateral := direction.cross(Vector3.UP)
-	var extended: Vector3 = player.global_position + direction * 0.70 + Vector3.UP * 0.085
+	var extension := lerpf(0.62, 0.74, clampf(player.slide_entry_speed / 8.5, 0, 1))
+	var extended: Vector3 = player.global_position + direction * extension + Vector3.UP * 0.085
 	var tucked: Vector3 = player.global_position + direction * 0.10 - lateral * 0.20 + Vector3.UP * 0.13
 	_pose_foot(player, true, slide_start_right.lerp(extended, entry))
 	_pose_foot(player, false, slide_start_left.lerp(tucked, entry))

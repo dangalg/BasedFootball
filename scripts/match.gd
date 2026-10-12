@@ -37,7 +37,8 @@ func _ready() -> void:
 	var shots_team_acceptance := "--shots-team-acceptance" in OS.get_cmdline_user_args()
 	var human_motion_acceptance := "--human-motion-acceptance" in OS.get_cmdline_user_args()
 	var teamplay_acceptance := "--teamplay-acceptance" in OS.get_cmdline_user_args()
-	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance or teamplay_acceptance
+	var contact_play_acceptance := "--contact-play-acceptance" in OS.get_cmdline_user_args()
+	shots_team_acceptance = shots_team_acceptance or human_motion_acceptance or teamplay_acceptance or contact_play_acceptance
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
@@ -75,7 +76,7 @@ func _ready() -> void:
 		for player in players:
 			player.freeze = true
 		ball.freeze = true
-		var session: Node = load("res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
+		var session: Node = load("res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
 	elif decision_acceptance:
@@ -349,6 +350,7 @@ func _physics_process(delta: float) -> void:
 	var controller_actions: Dictionary = {
 		"pass": Input.is_action_just_pressed("pass"), "through": Input.is_action_just_pressed("through"),
 		"primary": Input.is_action_just_pressed("shoot"), "primary_release": Input.is_action_just_released("shoot"),
+		"primary_held": Input.is_action_pressed("shoot"),
 		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop"),
 		"l1": Input.is_action_pressed("switch"), "r1": Input.is_action_pressed("modifier_r1"), "l2": controlled.jockey,
 		"run": Input.is_action_just_pressed("switch"), "support": Input.is_action_just_pressed("modifier_r1")
@@ -384,6 +386,8 @@ func _attacking_contact() -> bool:
 	return controlled.reach_ball(ball) and ball.last_touch_team in [-1, controlled.team]
 
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
+	if controlled.action_kind == "grab":
+		controlled.grab_held = pressed.get("primary_held", false) and pressed.get("l2", false)
 	var shot_direction := controlled.intent.normalized() if controlled.intent.length() > 0.2 else controlled.aim
 	if _attacking_contact() and (pressed.get("run", false) or pressed.get("support", false)) and not pressed.get("primary", false) and not charging:
 		var candidate: FootballPlayer = null
@@ -408,16 +412,16 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			charging = true
 			charge = 0
 		else:
-			var shouldered := false
-			for opponent in players:
-				if opponent.team == controlled.team or not opponent.reach_ball(ball):
-					continue
-				var side := opponent.global_position - controlled.global_position
-				side.y = 0
-				if side.length() < 0.95 and absf(side.normalized().dot(controlled.aim)) < 0.6:
-					shouldered = controlled.shoulder(ball)
-					break
-			if not shouldered:
+			var opponent := _close_opponent(controlled)
+			if opponent != null:
+				var toward := opponent.global_position - controlled.global_position
+				toward.y = 0
+				controlled.aim = toward.normalized()
+			if pressed.get("l2", false):
+				controlled.grab(ball)
+			elif opponent != null:
+				controlled.push(ball)
+			else:
 				controlled.tackle(ball)
 	if charging:
 		charge = minf(1, charge + delta / 0.8)
@@ -460,6 +464,18 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			controlled.loft(ball, direction.normalized(), direction.length() if receiver != null else 12, false, "lob")
 		else:
 			controlled.kick(ball, direction, 13.5, 0.14, "through")
+
+func _close_opponent(player: FootballPlayer) -> FootballPlayer:
+	var closest := 1.05
+	var winner: FootballPlayer = null
+	for opponent in players:
+		if opponent.team == player.team or not opponent.upright_ready():
+			continue
+		var distance := opponent.global_position.distance_to(player.global_position)
+		if distance < closest:
+			closest = distance
+			winner = opponent
+	return winner
 
 func _pass_distance(direction: Vector3) -> float:
 	var distance := 12.0
@@ -594,7 +610,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					for body in player.ragdoll.bodies:
 						_pause_node(body)
 			ball.freeze = true
-			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence.\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
+			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/push in defence. L2 + Circle: hold grab.\nSquare: lofted pass in attack, sliding tackle in defence.\nR3: timed hop. R1 + Circle: finesse. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"
 			for saved in pause_states:

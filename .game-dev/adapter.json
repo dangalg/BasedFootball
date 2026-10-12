@@ -224,6 +224,31 @@
         "path": "staging/capture.json",
         "format": "game-dev-capture-v1"
       }
+    },
+    {
+      "id": "contact-play",
+      "title": "Committed slides, physical shoves and breakable grabs",
+      "description": "One finite clean/miss, fall/glance/hop, push and grab contact sequence.",
+      "command": {
+        "arguments": [
+          "contact-play"
+        ],
+        "runtime": "node",
+        "workingDirectory": ".",
+        "executable": "tools/visual_scene_check.mjs"
+      },
+      "timeoutSeconds": 50,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }

@@ -108,6 +108,15 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 				continue
 			var separation := opponent.global_position - player.global_position
 			separation.y = 0
+			if separation.length() < 1.0 and opponent.reach_ball(ball) and player.upright_ready():
+				if confidence < 0.08:
+					player.aim = separation.normalized()
+					if player.grab(ball):
+						return "grab"
+				elif confidence < 0.26:
+					player.aim = separation.normalized()
+					if player.push(ball):
+						return "push"
 			if separation.length() < 0.92 and absf(separation.normalized().dot(player.aim)) < 0.8:
 				if confidence < 0.75 and player.shoulder(ball):
 					return "shoulder"

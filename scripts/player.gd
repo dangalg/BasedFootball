@@ -108,6 +108,12 @@ var hop_previous_vertical := 0.0
 var ragdoll: FootballPlayerRagdoll
 var getting_up := false
 var slide_victims: Array[int] = []
+var slide_entry_speed := 0.0
+var grab_target: FootballPlayer
+var grab_held := false
+var grab_right := true
+var grab_rest_length := 0.0
+var last_grab_force := Vector3.ZERO
 var ai_rng := RandomNumberGenerator.new()
 var ai_lane_offset := 0.0
 var ai_style := 0.5
@@ -195,6 +201,7 @@ func _physics_process(delta: float) -> void:
 	name_label.visible = selected
 	visual_controller.animate(self, delta)
 	_update_dribble_contact()
+	_update_body_challenge(delta)
 	_update_challenge()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
@@ -215,7 +222,10 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		speed *= 0.65
 	var desired := intent.limit_length(1.0) * speed
 	if action_kind == "slide":
-		desired = action_direction * lerpf(7.0, 2.5, clampf(action_elapsed / action_duration, 0, 1))
+		# A committed slide loses speed through ground friction, never steering
+		# or accelerating back up after hitting a body or the boards.
+		state.apply_central_force(-horizontal.normalized() * mass * 5.5 if horizontal.length() > 0.12 else -horizontal * mass / state.step)
+		return
 	elif action_kind == "kick":
 		if not action_has_hit and action_elapsed <= kick_contact_time:
 			# Keep the run-up through the strike. Braking at button release made
@@ -230,7 +240,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 			desired *= 0.35
 	elif action_kind == "standing":
 		desired = action_direction * 1.8
-	elif action_kind == "shoulder":
+	elif action_kind in ["shoulder", "push", "grab"]:
 		desired *= 0.65
 	elif recovery_remaining > 0.0:
 		desired *= 0.3
@@ -266,6 +276,7 @@ func receive_slide(impulse: Vector3, contact: Vector3, relative_speed: float) ->
 	close_control_remaining = 0
 	dribble_active = false
 	if instability > resistance:
+		_release_grab("fall")
 		action_kind = ""
 		hop_active = false
 		hop_launched = false
@@ -486,10 +497,93 @@ func tackle(ball: FootballBall) -> bool:
 	return _begin_challenge("standing", ball, 0.26, 0.85)
 
 func slide(ball: FootballBall) -> bool:
-	return _begin_challenge("slide", ball, 0.6, 1.6)
+	return _begin_challenge("slide", ball, 0.68, 1.6)
 
 func shoulder(ball: FootballBall) -> bool:
 	return _begin_challenge("shoulder", ball, 0.24, 0.9)
+
+func push(ball: FootballBall) -> bool:
+	return _begin_challenge("push", ball, 0.34, 1.0)
+
+func grab(ball: FootballBall) -> bool:
+	if energy < 0.15 or not _begin_challenge("grab", ball, 0.72, 1.4):
+		return false
+	grab_target = null
+	grab_held = true
+	last_grab_force = Vector3.ZERO
+	return true
+
+func _hand(right: bool) -> Vector3:
+	var elbow: Node3D = visual_controller.right_elbow if right else visual_controller.left_elbow
+	return elbow.to_global(Vector3(0, -0.26, 0))
+
+func _body_contact() -> FootballPlayer:
+	for node in get_parent().get_children():
+		if not node is FootballPlayer or node == self or node.team == team or node.ragdoll != null or node.hop_active:
+			continue
+		var offset: Vector3 = node.global_position - global_position
+		offset.y = 0
+		if offset.length() > 1.1 or offset.normalized().dot(action_direction) < 0.35:
+			continue
+		var chest: Vector3 = node.global_position + Vector3.UP * 1.12
+		for right in [false, true]:
+			if _hand(right).distance_to(chest) <= 0.44:
+				grab_right = right
+				return node
+	return null
+
+func _release_grab(reason: String) -> void:
+	if is_instance_valid(grab_target):
+		physical_event.emit("grab_release", {"victim": grab_target.player_id, "reason": reason})
+	grab_target = null
+	grab_held = false
+
+func _update_body_challenge(delta: float) -> void:
+	if action_kind not in ["push", "grab"]:
+		if is_instance_valid(grab_target):
+			_release_grab("interrupted")
+		return
+	if action_kind == "grab" and not grab_held:
+		_release_grab("button_release")
+		action_elapsed = action_duration
+		return
+	if not action_has_hit and action_elapsed >= 0.10 and action_elapsed <= 0.28:
+		var other := _body_contact()
+		if other != null:
+			action_has_hit = true
+			challenge_contacts += 1
+			if action_kind == "push":
+				var direction := other.global_position - global_position
+				direction.y = 0
+				var effective_mass := mass * other.mass / (mass + other.mass)
+				var speed := 2.8 * lerpf(0.75, 1.0, energy) + maxf(0, (linear_velocity - other.linear_velocity).dot(direction.normalized())) * 0.3
+				var impulse := direction.normalized() * effective_mass * speed
+				other.receive_slide(impulse, _hand(grab_right), speed)
+				apply_central_impulse(-impulse)
+				energy = maxf(0, energy - 0.04)
+				physical_event.emit("push_contact", {"victim": other.player_id, "speed": speed})
+			else:
+				grab_target = other
+				grab_rest_length = _hand(grab_right).distance_to(other.global_position + Vector3.UP * 1.12)
+				physical_event.emit("grab_contact", {"victim": other.player_id})
+	if action_kind != "grab" or not is_instance_valid(grab_target):
+		return
+	var separation := grab_target.global_position - global_position
+	separation.y = 0
+	var relative := grab_target.linear_velocity - linear_velocity
+	var break_speed := 3.0 * grab_target.balance_skill * lerpf(0.7, 1.0, energy)
+	if separation.length() > 1.12 or relative.length() > break_speed or grab_target.ragdoll != null or grab_target.hop_active or energy < 0.08 or action_elapsed >= action_duration:
+		_release_grab("physical_break" if action_elapsed < action_duration else "duration")
+		return
+	var gap := grab_target.global_position + Vector3.UP * 1.12 - _hand(grab_right)
+	var direction := gap.normalized()
+	var effective_mass := mass * grab_target.mass / (mass + grab_target.mass)
+	var tension := maxf(0, (gap.length() - grab_rest_length) * 28 + relative.dot(direction) * 2)
+	var force := direction * minf(effective_mass * tension, minf(mass, grab_target.mass) * 9)
+	last_grab_force = force
+	grab_target.apply_central_force(-force)
+	apply_central_force(force)
+	energy = maxf(0, energy - delta * 0.18 / stamina_trait)
 
 func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldown: float) -> bool:
 	if not upright_ready():
@@ -513,7 +607,9 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 		visual_controller.begin_slide(self)
 		body_collider.shape.height = 0.8
 		body_collider.position.y = 0.43
-		apply_central_impulse(action_direction * mass * 2.0)
+		slide_entry_speed = clampf(Vector3(linear_velocity.x, 0, linear_velocity.z).dot(action_direction) + 2.0, 2.0, 8.5)
+		var launch := action_direction * slide_entry_speed - Vector3(linear_velocity.x, 0, linear_velocity.z)
+		apply_central_impulse(launch * mass)
 	elif kind == "standing":
 		apply_central_impulse(action_direction * mass * 0.4)
 	return true
@@ -570,7 +666,7 @@ func _update_challenge() -> void:
 							action_has_hit = true
 							challenge_contacts += 1
 							break
-		else:
+		elif action_kind in ["slide", "standing"]:
 			var active := action_elapsed >= (0.08 if action_kind == "slide" else 0.05) and action_elapsed <= (0.50 if action_kind == "slide" else 0.2)
 			if active and _boot_distance(action_ball.global_position, last_boot_world, boot_world) <= FootballBall.RADIUS + 0.12:
 				action_ball.touch(team, player_id, action_direction * (3.8 if action_kind == "slide" else 2.6))
@@ -580,6 +676,8 @@ func _update_challenge() -> void:
 				match_touches += 1
 	last_boot_world = boot_world
 	if action_elapsed >= action_duration:
+		if action_kind == "grab":
+			_release_grab("duration")
 		recovery_remaining = 0.65 if action_kind == "slide" else (0.0 if action_kind == "kick" else 0.25)
 		body_collider.shape.height = 1.65
 		body_collider.position.y = 0.86
@@ -621,6 +719,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	_release_grab("restart")
 	incoming_pass_from = ""
 	incoming_pass_remaining = 0
 	hop_landing_remaining = 0
