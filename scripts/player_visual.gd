@@ -356,6 +356,20 @@ func animate(player: Node3D, delta: float) -> void:
 	left_arm.quaternion = _limit_rotation(previous_left_arm, left_arm.quaternion, delta * 12)
 	right_arm.quaternion = _limit_rotation(previous_right_arm, right_arm.quaternion, delta * 12)
 	if skinned != null:
+		head_pivot.rotation.x = lerpf(head_pivot.rotation.x, .25 if player.emotion == "sad" else 0.0, minf(1, delta * 8))
+		if player.emotion == "celebrate":
+			var cheer: float = sin(player.emotion_time * 5 + style_phase) * .12
+			left_arm.rotation = Vector3(-.4, 0, -2.6 + cheer)
+			right_arm.rotation = Vector3(-.4, 0, 2.6 - cheer)
+			left_elbow.rotation.x = .65
+			right_elbow.rotation.x = .65
+		elif player.emotion == "sad":
+			upper_body.rotation.x = .18
+		elif player.emotion == "carry":
+			left_arm.rotation = Vector3(.8, 0, -.12)
+			right_arm.rotation = Vector3(.8, 0, .12)
+			left_elbow.rotation.x = .7
+			right_elbow.rotation.x = .7
 		skinned.sync()
 	previous_hip_height = player.global_position.y + player.body_visual.position.y + 0.88
 

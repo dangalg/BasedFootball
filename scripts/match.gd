@@ -30,6 +30,7 @@ var acceptance: bool = false
 var pause_requested: bool = false
 var decision_driver: Node
 var pause_states: Array[Dictionary] = []
+var goal_flow := FootballGoalFlow.new()
 
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
@@ -334,12 +335,9 @@ func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 func _physics_process(delta: float) -> void:
 	if phase != "playing":
 		return
-	if kickoff_remaining > 0:
-		kickoff_remaining -= delta
-		for player in players:
-			player.intent = Vector3.ZERO
-		return
-	remaining = maxf(0, remaining - delta)
+	kickoff_remaining = maxf(0, kickoff_remaining - delta)
+	if not goal_flow.active:
+		remaining = maxf(0, remaining - delta)
 	if decision_driver != null:
 		decision_driver.decide(delta)
 	var movement: Vector2 = Input.get_vector("left", "right", "up", "down") if decision_driver == null else decision_driver.movement
@@ -382,6 +380,9 @@ func _physics_process(delta: float) -> void:
 	if decision_driver == null and Input.is_action_just_pressed("shoulder"):
 		if controlled.shoulder(ball):
 			_record("shoulder", controlled, {"source": "controller"})
+	if goal_flow.active:
+		goal_flow.tick(delta)
+		return
 	for player in players:
 		if player != controlled:
 			var action := FootballAI.decide(player, players, ball, delta)
@@ -594,6 +595,8 @@ func _control_ball() -> FootballPlayer:
 	return candidate
 
 func _check_goal() -> void:
+	if goal_flow.active:
+		return
 	# Entire sphere must cross the line, within the mouth and under the bar.
 	if absf(ball.global_position.x) > 18.1 + FootballBall.RADIUS and absf(ball.global_position.x) < 20.3 and absf(ball.global_position.z) < 2.21 - FootballBall.RADIUS and ball.global_position.y < 2.31 - FootballBall.RADIUS:
 		var scoring := 0 if ball.global_position.x > 0 else 1
@@ -601,7 +604,7 @@ func _check_goal() -> void:
 		_record("goal", null, {"team": scoring, "ball": _vec(ball.global_position)})
 		sound.play_event("goal")
 		hud.flash("%s GOAL!" % ("HOME" if scoring == 0 else "AWAY"), 2.0)
-		reset_positions(1 - scoring)
+		goal_flow.begin(self, scoring)
 
 func _finish_match() -> void:
 	phase = "finished"
@@ -616,6 +619,9 @@ func _finish_match() -> void:
 	match_finished.emit()
 
 func rematch() -> void:
+	goal_flow.active = false
+	for player in players:
+		player.emotion = ""
 	remaining = DURATION
 	scores = [0, 0]
 	phase = "playing"
@@ -687,7 +693,15 @@ func _process(delta: float) -> void:
 	aim_line.visible = phase == "playing"
 	hud.update_match(scores, remaining, controlled, maxf(charge, delivery_charge))
 	var devices := Input.get_connected_joypads()
-	hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
+	if goal_flow.active and goal_flow.state != "celebrating":
+		var target: Vector3 = goal_flow.targets[controlled.player_id]
+		var direction := target - controlled.global_position
+		direction.y = 0
+		aim_line.position = controlled.global_position + direction.normalized() * 1.5 + Vector3.UP * .05
+		aim_line.rotation.y = atan2(direction.x, direction.z)
+		hud.status.text = "WALK TO YOUR KICKOFF POSITION  /  %.1f m" % direction.length()
+	else:
+		hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
 
 func _record(kind: String, player: FootballPlayer, extra: Dictionary = {}) -> void:
 	var entry := {"time": snappedf(DURATION - remaining, 0.01), "kind": kind, "player": player.player_id if player != null else "", "team": player.team if player != null else -1}

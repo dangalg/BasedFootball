@@ -5,6 +5,29 @@
   "version": "1.0.0",
   "scenarios": [
     {
+      "id": "goal-celebration",
+      "title": "Physical goal celebrations and walk-back kickoff",
+      "description": "One goal, celebration, ball retrieval and continuous player return sequence.",
+      "command": {
+        "workingDirectory": ".",
+        "runtime": "node",
+        "executable": "tools/celebration_capture.mjs",
+        "arguments": []
+      },
+      "timeoutSeconds": 70,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
+    },
+    {
       "id": "realistic-player",
       "title": "One realistic footballer and physical action sequence",
       "description": "Finite rendered idle/run/turn/dribble/kick/slide/hop/ragdoll capture. No hardware input or full match regression.",

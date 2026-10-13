@@ -23,6 +23,8 @@ var intent := Vector3.ZERO
 var aim := Vector3.RIGHT
 var sprint: bool = false
 var selected: bool = false
+var emotion := ""
+var emotion_time := 0.0
 var kick_cooldown: float = 0.0
 var tackle_cooldown: float = 0.0
 var touch_cooldown: float = 0.0
@@ -153,6 +155,7 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	emotion_time += delta
 	buffered_remaining = maxf(0, buffered_remaining - delta)
 	incoming_pass_remaining = maxf(0, incoming_pass_remaining - delta)
 	hop_landing_remaining = maxf(0, hop_landing_remaining - delta)
