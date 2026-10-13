@@ -1,0 +1,45 @@
+{
+  "assetId": "based_football_squad",
+  "category": "character",
+  "description": "Local CC0 MakeHuman athlete; football kit, contact-anchor retarget, embedded cloth textures",
+  "displayName": "based-football-squad",
+  "files": [
+    {
+      "bytes": 1756344,
+      "kind": "model",
+      "path": "model.glb",
+      "sha256": "e6bb1abf5fabe1075422a0c5718f2dd4d4e09d5e234c37f4eeacf5bd7a54fbb6"
+    },
+    {
+      "bytes": 1740,
+      "kind": "metadata",
+      "path": "metadata.json",
+      "sha256": "50d3e38a0318c7d28d61d22dfd7ddaf6f3a3758a7067bbce1cd00bc27c8cd758"
+    },
+    {
+      "bytes": 220,
+      "kind": "provenance",
+      "path": "provenance.json",
+      "sha256": "e9703adaa6aa65d2e299bc50b25be70be613f31a0d316c3c7195c95e00133521"
+    },
+    {
+      "bytes": 3175,
+      "kind": "validation",
+      "path": "validation.json",
+      "sha256": "13978595d7cd79c002c02d808f7da6bb9a8f08d707b55bbc3baab233ca3ac8ab"
+    }
+  ],
+  "license": "CC0-1.0",
+  "model": "model.glb",
+  "packageId": "pkg_59c455780153681e98448b28",
+  "provenance": {
+    "origin": "imported"
+  },
+  "schema": "game_dev.asset_package.v1",
+  "validation": {
+    "errorCount": 0,
+    "passed": true,
+    "warningCount": 0
+  },
+  "version": "1.0.0"
+}

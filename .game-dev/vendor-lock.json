@@ -1,0 +1,15 @@
+{
+  "schema": "game_dev.vendor_lock.v1",
+  "entries": [
+    {
+      "packageId": "pkg_59c455780153681e98448b28",
+      "assetId": "based_football_squad",
+      "version": "1.0.0",
+      "destination": "assets\\characters\\squad",
+      "modelSha256": "e6bb1abf5fabe1075422a0c5718f2dd4d4e09d5e234c37f4eeacf5bd7a54fbb6",
+      "manifestSha256": "e339ff70b2bc2d5375108889d7c331f62809ff13e704ac3dbcbb1836b845eb76",
+      "license": "CC0-1.0",
+      "admittedAt": "2026-10-13T14:05:07.52Z"
+    }
+  ]
+}

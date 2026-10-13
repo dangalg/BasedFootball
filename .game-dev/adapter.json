@@ -5,6 +5,29 @@
   "version": "1.0.0",
   "scenarios": [
     {
+      "id": "realistic-player",
+      "title": "One realistic footballer and physical action sequence",
+      "description": "Finite rendered idle/run/turn/dribble/kick/slide/hop/ragdoll capture. No hardware input or full match regression.",
+      "command": {
+        "workingDirectory": ".",
+        "runtime": "node",
+        "executable": "tools/realistic_player_capture.mjs",
+        "arguments": []
+      },
+      "timeoutSeconds": 70,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
+    },
+    {
       "id": "visual-scene-check",
       "title": "Windowless courtyard scene integrity",
       "description": "Loads the rebuilt game pack with Godot's headless dummy renderer. Checks scene assets, HUD bounds and preserved collisions; supplies no pixel or GPU evidence.",

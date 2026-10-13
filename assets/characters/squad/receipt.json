@@ -1,0 +1,23 @@
+{
+  "completedAt": "2026-10-13T14:04:51.013Z",
+  "destination": {
+    "assetId": "based_football_squad",
+    "version": "1.0.0"
+  },
+  "evidence": {
+    "blenderNormalizationPerformed": false,
+    "gpuImportTestPerformed": false,
+    "humanVisualReviewPerformed": false,
+    "modelBytesCopiedAndHashed": true,
+    "policyValidationCompleted": true,
+    "staticInspectionCompleted": true
+  },
+  "manifestSha256": "e339ff70b2bc2d5375108889d7c331f62809ff13e704ac3dbcbb1836b845eb76",
+  "packageId": "pkg_59c455780153681e98448b28",
+  "schema": "game_dev.package_receipt.v1",
+  "source": {
+    "bytes": 1756344,
+    "fileName": "ari.glb",
+    "sha256": "e6bb1abf5fabe1075422a0c5718f2dd4d4e09d5e234c37f4eeacf5bd7a54fbb6"
+  }
+}

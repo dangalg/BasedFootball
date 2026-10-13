@@ -1,0 +1,9 @@
+{
+  "origin": "imported",
+  "schema": "game_dev.asset_provenance.v1",
+  "source": {
+    "bytes": 1756344,
+    "fileName": "ari.glb",
+    "sha256": "e6bb1abf5fabe1075422a0c5718f2dd4d4e09d5e234c37f4eeacf5bd7a54fbb6"
+  }
+}

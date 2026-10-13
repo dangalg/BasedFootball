@@ -148,9 +148,8 @@ func build(player: Node3D) -> void:
 	player.name_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	player.name_label.no_depth_test = true
 	head_rest = head_pivot.position
-	if player.player_id == "ari":
-		skinned = FootballSkinnedAthlete.new()
-		skinned.build(player, self)
+	skinned = FootballRealisticAthlete.new()
+	skinned.build(player, self)
 
 func animate(player: Node3D, delta: float) -> void:
 	motion_time += delta

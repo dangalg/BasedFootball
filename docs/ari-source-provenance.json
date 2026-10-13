@@ -1,0 +1,13 @@
+{
+  "source": "C:\\repos\\HumanLife2\\tools\\build_human.py",
+  "source_sha256": "8c7bf875aa8d9455ecd078d867568fa516984f84a4095dc72ff494d25d1a5059",
+  "asset_bundle": "C:\\repos\\MediEvalBattle\\external\\makehuman-assets",
+  "license": "CC0-1.0",
+  "license_url": "https://github.com/makehumancommunity/makehuman/blob/master/LICENSE.md",
+  "transformations": [
+    "football kit and exposed leg masks",
+    "weighted contact-anchor rest retarget",
+    "13 deformation bones; sculpted fingers"
+  ],
+  "vertices": 23174
+}

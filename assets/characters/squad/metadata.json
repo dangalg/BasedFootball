@@ -1,0 +1,70 @@
+{
+  "assetId": "based_football_squad",
+  "category": "character",
+  "description": "Local CC0 MakeHuman athlete; football kit, contact-anchor retarget, embedded cloth textures",
+  "displayName": "based-football-squad",
+  "inspection": {
+    "animationCount": 0,
+    "boundingBox": {
+      "max": [
+        0.3450379967689514,
+        1.6861051321029663,
+        0.13624757528305054
+      ],
+      "min": [
+        -0.34503796696662903,
+        0.0366523340344429,
+        -0.2103007435798645
+      ],
+      "sizeMeters": [
+        0.6900759637355804,
+        1.6494527980685234,
+        0.34654831886291504
+      ]
+    },
+    "boundingBoxEmpty": false,
+    "fileBytes": 1756344,
+    "filePath": "model.glb",
+    "generator": "glTF-Transform v4.5.1",
+    "hasNormals": true,
+    "hasSkin": true,
+    "hasTangents": false,
+    "hasUVs": true,
+    "materialCount": 13,
+    "meshCount": 14,
+    "pbr": {
+      "hasBaseColorTexture": true,
+      "hasEmissiveTexture": false,
+      "hasMetallicRoughnessTexture": false,
+      "hasNormalTexture": false,
+      "hasOcclusionTexture": false
+    },
+    "primitiveCount": 17,
+    "sceneGraphFallback": false,
+    "textureCount": 2,
+    "textureResolutions": [
+      {
+        "bytes": 73364,
+        "height": 2048,
+        "mimeType": "image/png",
+        "name": "TShirt",
+        "width": 2048
+      },
+      {
+        "bytes": 73364,
+        "height": 2048,
+        "mimeType": "image/png",
+        "name": "FootballShorts",
+        "width": 2048
+      }
+    ],
+    "triangleCount": 42670,
+    "undrawnMeshCount": 0,
+    "undrawnPrimitiveCount": 0,
+    "undrawnTriangleCount": 0,
+    "vertexCount": 25618,
+    "warnings": []
+  },
+  "license": "CC0-1.0",
+  "schema": "game_dev.asset_metadata.v1"
+}
