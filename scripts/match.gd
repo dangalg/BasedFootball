@@ -31,6 +31,7 @@ var pause_requested: bool = false
 var decision_driver: Node
 var pause_states: Array[Dictionary] = []
 var goal_flow := FootballGoalFlow.new()
+var referee := FootballReferee.new()
 
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
@@ -71,11 +72,14 @@ func _ready() -> void:
 	add_child(hud)
 	sound = FootballSound.new()
 	add_child(sound)
+	referee.build(self)
 	var aim_shape := BoxMesh.new()
 	aim_shape.size = Vector3(0.065, 0.04, 1.7)
 	aim_line = FootballArt.mesh(self, aim_shape, FootballArt.material(Color("ffe58b")))
 	reset_positions(0)
 	_select(0)
+	if not acceptance:
+		goal_flow.begin_initial(self,0)
 	hud.flash("YOUR TEAM. YOUR GAME.", 3.0)
 	if visual_acceptance or handling_acceptance or impact_acceptance:
 		# Windowless scene validation never reads hardware input or runs a match.
@@ -191,7 +195,7 @@ func _build_pitch() -> void:
 		for height in [0.95, 1.7, 2.6]:
 			FootballArt.box(self, Vector3(44, 0.035, 0.035), Vector3(0, height, side * 18.7), rail)
 	FootballArt.line(self, Vector3(0, 0.015, -11.9), Vector3(0, 0.015, 11.9), 0.07, white)
-	FootballArt.circle(self, 3.0, Vector3(0, 0.018, 0), white, 0.035)
+	FootballArt.circle(self, FootballRules.RESTART_DISTANCE, Vector3(0, 0.018, 0), white, 0.035)
 	FootballArt.cylinder(self, 0.12, 0.02, Vector3(0, 0.025, 0), white)
 	# Branding sits on a small board at the far edge, away from the scoreboard.
 	FootballArt.box(self, Vector3(7.6, 1.0, 0.16), Vector3(-10, 1.6, -13), rail)
@@ -286,6 +290,8 @@ func reset_positions(kickoff_team: int) -> void:
 	delivery_charge = 0
 
 func _select(index: int) -> void:
+	if players[clampi(index,0,2)].sent_off:
+		return
 	delivery_kind = ""
 	delivery_charge = 0
 	if controlled != null:
@@ -311,7 +317,7 @@ func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 				carrier = opponent
 	var own_goal := Vector3(-18 if controlled.team == 0 else 18, 0, 0)
 	for i in range(3):
-		if i == selected_index or not players[i].upright_ready():
+		if i == selected_index or players[i].sent_off or not players[i].upright_ready():
 			continue
 		var value := -players[i].global_position.distance_to(ball.global_position)
 		if carrier != null:
@@ -335,6 +341,7 @@ func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 func _physics_process(delta: float) -> void:
 	if phase != "playing":
 		return
+	referee.tick(delta)
 	kickoff_remaining = maxf(0, kickoff_remaining - delta)
 	if not goal_flow.active:
 		remaining = maxf(0, remaining - delta)
@@ -384,7 +391,7 @@ func _physics_process(delta: float) -> void:
 		goal_flow.tick(delta)
 		return
 	for player in players:
-		if player != controlled:
+		if player != controlled and not player.sent_off:
 			var action := FootballAI.decide(player, players, ball, delta)
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
@@ -394,8 +401,8 @@ func _physics_process(delta: float) -> void:
 	# This is a visible dead-ball restart for an escape over the low boards.
 	if absf(ball.global_position.z) > 13.2 or absf(ball.global_position.x) > 21 or ball.global_position.y < -1:
 		_record("out_of_court", null)
-		reset_positions(1 if ball.last_touch_team == 0 else 0)
-		hud.flash("BALL OUT — CENTRE RESTART")
+		goal_flow.begin_free_kick(self,1 if ball.last_touch_team == 0 else 0, Vector3(clampf(ball.global_position.x,-16,16),0,clampf(ball.global_position.z,-10.5,10.5)))
+		hud.flash("BALL OUT — RETURN IT FOR THE RESTART")
 	if remaining <= 0:
 		_finish_match()
 
@@ -522,6 +529,7 @@ func _pass_distance(direction: Vector3) -> float:
 	return clampf(distance, 6, 20)
 
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
+	goal_flow.notify_kick(player)
 	# Missed swings emit no contact and therefore create no receiving assignment.
 	for teammate in players:
 		teammate.incoming_pass_remaining = 0
@@ -560,6 +568,8 @@ func _on_dribble_contact(player: FootballPlayer) -> void:
 
 func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
 	_record(kind, player, detail)
+	if referee.actor != null:
+		referee.observe(kind,detail,player)
 
 func _control_ball() -> FootballPlayer:
 	# One nearest eligible foot per tick, with a small continuity preference.
@@ -608,6 +618,7 @@ func _check_goal() -> void:
 
 func _finish_match() -> void:
 	phase = "finished"
+	referee.actor.intent = Vector3.ZERO
 	match_count += 1
 	for player in players:
 		player.intent = Vector3.ZERO
@@ -619,6 +630,7 @@ func _finish_match() -> void:
 	match_finished.emit()
 
 func rematch() -> void:
+	referee.reset()
 	goal_flow.active = false
 	for player in players:
 		player.emotion = ""
@@ -633,6 +645,7 @@ func rematch() -> void:
 		player.active_seconds = 0
 		player.match_touches = 0
 	reset_positions(0)
+	goal_flow.begin_initial(self,0)
 	_select(0)
 	_record("rematch", null)
 
@@ -650,6 +663,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_pause_node(player.ragdoll)
 					for body in player.ragdoll.bodies:
 						_pause_node(body)
+			_pause_node(referee.actor)
 			ball.freeze = true
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Hold/release Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/push in defence. L2 + Circle: hold grab.\nHold/release Square: lob in attack; press for a slide in defence.\nR3: timed hop. R1 + Circle: finesse. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Triangle / I: vibration intensity   •   Options / Esc RESUME   •   Q EXIT")
 		elif phase == "paused":
@@ -692,6 +706,9 @@ func _process(delta: float) -> void:
 	aim_line.rotation.y = atan2(controlled.aim.x, controlled.aim.z)
 	aim_line.visible = phase == "playing"
 	hud.update_match(scores, remaining, controlled, maxf(charge, delivery_charge))
+	var cautions := int(referee.yellow.get(controlled.player_id,0))
+	if cautions > 0:
+		hud.player_label.text += " / YELLOW"
 	var devices := Input.get_connected_joypads()
 	if goal_flow.active and goal_flow.state != "celebrating":
 		var target: Vector3 = goal_flow.targets[controlled.player_id]
@@ -699,7 +716,8 @@ func _process(delta: float) -> void:
 		direction.y = 0
 		aim_line.position = controlled.global_position + direction.normalized() * 1.5 + Vector3.UP * .05
 		aim_line.rotation.y = atan2(direction.x, direction.z)
-		hud.status.text = "WALK TO YOUR KICKOFF POSITION  /  %.1f m" % direction.length()
+		var instruction: String = goal_flow.position_reason(controlled)
+		hud.status.text = instruction.to_upper() if instruction != "" else "LEGAL POSITION / YOU MAY STAND ANYWHERE HERE"
 	else:
 		hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
 

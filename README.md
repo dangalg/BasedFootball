@@ -40,6 +40,13 @@ bounded, varied reaction timing, without score-based boosts or future controller
 | **Foot-contact dribbling and kicks**, including ground, lofted and through passes | **Local career saves** retained across matches |
 | **Standing, sliding and shoulder challenges** with contact windows and recovery | **No packs or transfers** to keep replacing your team |
 
+The squad now uses detailed skinned characters with team kits and shirt numbers.
+Goals bring celebrations and disappointed reactions, followed by a physical walk
+back to kickoff. A referee wearing black watches play: unseen offences escape
+punishment, while witnessed fouls and ignored restart warnings can lead to cards
+and send-offs. Ground marks guide players without blocking movement.
+See [goals, restarts and discipline](docs/match-flow.md).
+
 ## Play
 
 **Current scope:** Windows PC, solo against AI, controller or keyboard. Three-minute

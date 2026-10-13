@@ -167,7 +167,7 @@ func animate(player: Node3D, delta: float) -> void:
 	var facing: Vector3 = player.action_direction if player.action_kind != "" else player.aim
 	# Intent can reverse before momentum does. Face the actual running direction
 	# rather than playing a forward run while travelling away from the face.
-	if player.action_kind == "" and not player.jockey and velocity.length() > 0.65:
+	if player.team >= 0 and player.action_kind == "" and not player.jockey and velocity.length() > 0.65:
 		facing = velocity.normalized()
 	if player.action_kind == "kick":
 		facing = Vector3(player.kick_target_offset.x, 0, player.kick_target_offset.z).normalized()
@@ -344,6 +344,9 @@ func animate(player: Node3D, delta: float) -> void:
 	else:
 		head_pivot.rotation.y = lerp_angle(head_pivot.rotation.y, 0, minf(1, delta * 8))
 		head_pivot.position = head_rest
+	if player.emotion == "ref_draw":
+		var referee = player.get_parent().referee
+		_pose_foot(player,true,referee._mark_point(referee.mark_progress)+Vector3.UP*.075)
 	_finish_feet(player)
 	if strike_toe:
 		player.strike_boot().global_basis = Basis(Vector3.UP, strike_toe_angle)
@@ -370,6 +373,15 @@ func animate(player: Node3D, delta: float) -> void:
 			right_arm.rotation = Vector3(.8, 0, .12)
 			left_elbow.rotation.x = .7
 			right_elbow.rotation.x = .7
+		elif player.emotion == "ref_card":
+			right_arm.rotation = Vector3(-.1,0,2.85)
+			right_elbow.rotation.x = .15
+		elif player.emotion == "ref_warn":
+			right_arm.rotation = Vector3(1.45,0,.15)
+			right_elbow.rotation.x = .1
+		elif player.emotion == "ref_draw":
+			upper_body.rotation.x = .25
+			head_pivot.rotation.x = .35
 		skinned.sync()
 	previous_hip_height = player.global_position.y + player.body_visual.position.y + 0.88
 

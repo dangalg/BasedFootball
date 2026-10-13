@@ -19,6 +19,8 @@ func build(player: Node3D, visual: FootballPlayerVisual) -> void:
 	number.pixel_size = 0.0034
 	number.outline_size = 0
 	number.rotation.y = PI
+	if player.team < 0:
+		number.hide()
 	skeleton.name = "RealisticSkeleton"
 	for mesh in meshes:
 		mesh.skeleton = NodePath("")
@@ -44,6 +46,8 @@ func _style(player: Node3D) -> void:
 				"FootballShorts": material.albedo_color = Color("203b55") if player.team == 0 else Color("51343d")
 				"Skin": material.albedo_color = [Color("c89470"), Color("8f6248"), Color("d6ab88")][variant]
 				"Hair", "Eyebrows": material.albedo_color = [Color("302925"), Color("493426"), Color("211e1c")][variant]
+			if player.team < 0 and original.resource_name in ["TShirt","FootballShorts","FootballSocks"]:
+				material.albedo_color = Color("242830")
 			mesh.set_surface_override_material(surface, material)
 
 func _hide_primitives(node: Node) -> void:

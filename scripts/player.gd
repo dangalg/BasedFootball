@@ -25,6 +25,7 @@ var sprint: bool = false
 var selected: bool = false
 var emotion := ""
 var emotion_time := 0.0
+var sent_off := false
 var kick_cooldown: float = 0.0
 var tackle_cooldown: float = 0.0
 var touch_cooldown: float = 0.0
@@ -329,6 +330,8 @@ func reach_ball(ball: FootballBall, distance: float = CONTROL_REACH) -> bool:
 	return difference.length() < distance and ball.global_position.y < 0.75
 
 func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "", curve: float = 0) -> bool:
+	if sent_off or team < 0:
+		return false
 	if not upright_ready():
 		return false
 	if kick_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0 or not reach_ball(ball):
@@ -419,6 +422,8 @@ func _update_kick_target() -> void:
 	kick_target_offset = kick_target_world - global_position
 
 func can_control(ball: FootballBall) -> bool:
+	if sent_off or team < 0:
+		return false
 	if kick_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0 or ball.control_block_remaining > 0.0 or not reach_ball(ball, CONTROL_REACH):
 		return false
 	if ball.global_position.y > 0.4:
@@ -631,6 +636,8 @@ func _update_body_challenge(delta: float) -> void:
 	energy = maxf(0, energy - delta * 0.18 / stamina_trait)
 
 func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldown: float) -> bool:
+	if sent_off:
+		return false
 	if not upright_ready():
 		return false
 	if tackle_cooldown > 0.0 or action_kind != "" or recovery_remaining > 0.0 or stagger_remaining > 0.0:
@@ -761,7 +768,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		var impulse := direction * closing * effective_mass * 0.65
 		other.receive_slide(impulse, contact, closing)
 		apply_central_impulse(-impulse)
-		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
+		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest, "ball_first": action_has_hit, "from_behind": direction.dot(other.aim) > .7, "studs_up": false, "dangerous_height": contact.y-other.global_position.y > .8})
 
 func reset_action() -> void:
 	buffered_remaining = 0

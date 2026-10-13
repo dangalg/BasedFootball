@@ -120,6 +120,11 @@ func _collider(body: Node) -> CollisionShape3D:
 	return null
 
 func begin(game: Node3D) -> void:
+	if "--referee-check" in OS.get_cmdline_user_args():
+		var fixture = load("res://tests/referee_acceptance.gd").new()
+		game.add_child(fixture)
+		fixture.begin(game)
+		return
 	if "--celebration-check" in OS.get_cmdline_user_args():
 		var fixture = load("res://tests/celebration_acceptance.gd").new()
 		game.add_child(fixture)
