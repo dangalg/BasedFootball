@@ -26,6 +26,8 @@ var selected: bool = false
 var emotion := ""
 var emotion_time := 0.0
 var sent_off := false
+var planned_receiver_id := ""
+var planned_receive_point := Vector3.ZERO
 var kick_cooldown: float = 0.0
 var tackle_cooldown: float = 0.0
 var touch_cooldown: float = 0.0
@@ -330,6 +332,8 @@ func reach_ball(ball: FootballBall, distance: float = CONTROL_REACH) -> bool:
 	return difference.length() < distance and ball.global_position.y < 0.75
 
 func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "", curve: float = 0) -> bool:
+	if kind not in ["pass","through","lob"]:
+		planned_receiver_id = ""
 	if sent_off or team < 0:
 		return false
 	if not upright_ready():
@@ -440,7 +444,7 @@ func dribble(ball: FootballBall) -> bool:
 	var player_velocity := Vector3(linear_velocity.x, 0, linear_velocity.z)
 	var ball_velocity := Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z)
 	var stick := minf(intent.length(), 1.0)
-	var receiving := incoming_pass_remaining > 0 and (ball_velocity - player_velocity).length() > 3.0
+	var receiving := incoming_pass_remaining > 0 and (ball_velocity - player_velocity).length() > 1.5
 	var stopping := stick < 0.05 and (player_velocity.length() > 0.12 or ball_velocity.length() > 0.12)
 	var turning := stick > 0.05 and intent.normalized().dot(relative.normalized()) < 0.7
 	var outward_speed := (ball_velocity - player_velocity).dot(relative.normalized())

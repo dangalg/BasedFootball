@@ -482,16 +482,12 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 
 func _release_delivery(direction: Vector3, button: String, power: float, high: bool) -> void:
 	var receiver := _pass_receiver(controlled, direction)
-	var strength := lerpf(8, 21, power) if button == "through" else lerpf(6.5, 19, power)
-	var distance := lerpf(5, 24, power)
-	if receiver != null:
-		var flight := clampf(receiver.global_position.distance_to(controlled.global_position) / strength, 0.15, 1.6)
-		var lead := receiver.global_position + receiver.linear_velocity * flight
-		if button == "through":
-			lead += Vector3(1 if controlled.team == 0 else -1, 0, 0) * lerpf(1.2, 3.8, power)
-		var offset := lead - controlled.global_position
-		offset.y = 0
-		direction = offset.normalized()
+	var delivery := FootballPassing.delivery(controlled,receiver,direction,"through" if button=="through" else "pass",power)
+	var strength: float = delivery.strength
+	var distance: float = delivery.distance
+	direction = delivery.direction
+	controlled.planned_receiver_id = receiver.player_id if receiver != null else ""
+	controlled.planned_receive_point = delivery.point
 	if button == "square" or (button == "through" and high):
 		var apex: float = clampf(2.4 + distance * 0.055, 2.8, 4.0) + (1.3 if high else 0)
 		var launch := FootballBall.loft_launch(distance, apex)
@@ -534,7 +530,12 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 	for teammate in players:
 		teammate.incoming_pass_remaining = 0
 	if kind in ["pass", "through", "lob"]:
-		var receiver := _pass_receiver(player, player.action_direction)
+		var receiver: FootballPlayer
+		for candidate in players:
+			if candidate.player_id == player.planned_receiver_id and not candidate.sent_off:
+				receiver = candidate
+		if receiver == null and player.planned_receiver_id == "":
+			receiver = _pass_receiver(player, player.action_direction)
 		if receiver != null:
 			receiver.incoming_pass_from = player.player_id
 			receiver.incoming_pass_remaining = 3.5
@@ -545,24 +546,10 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 		Input.start_joy_vibration(0, vibration_intensity * 0.2, vibration_intensity * clampf(player.kick_strength / 32, 0.15, 1), 0.09)
 
 func _pass_receiver(passer: FootballPlayer, direction: Vector3) -> FootballPlayer:
-	var receiver: FootballPlayer = null
-	var best := -INF
-	for teammate in players:
-		if teammate == passer or teammate.team != passer.team or not teammate.upright_ready():
-			continue
-		var offset := teammate.global_position - ball.global_position
-		offset.y = 0
-		var along := offset.dot(direction)
-		var lateral := (offset - direction * along).length()
-		if along < 0.4 or lateral > maxf(2.5, along * 0.65):
-			continue
-		var score := -lateral * 3 - along * 0.08
-		if score > best:
-			best = score
-			receiver = teammate
-	return receiver
+	return FootballPassing.receiver(passer,direction,players)
 
 func _on_dribble_contact(player: FootballPlayer) -> void:
+	player.incoming_pass_remaining = 0
 	_record("touch", player)
 	sound.play_contact("touch", 0.2)
 
@@ -720,6 +707,10 @@ func _process(delta: float) -> void:
 		hud.status.text = instruction.to_upper() if instruction != "" else "LEGAL POSITION / YOU MAY STAND ANYWHERE HERE"
 	else:
 		hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
+		if delivery_kind != "":
+			var direction := controlled.intent.normalized() if controlled.intent.length()>.2 else controlled.aim
+			var target := _pass_receiver(controlled,direction)
+			hud.status.text = "DELIVERY TO %s / RELEASE TO KICK" % target.player_name if target!=null else "DELIVERY INTO SPACE / RELEASE TO KICK"
 
 func _record(kind: String, player: FootballPlayer, extra: Dictionary = {}) -> void:
 	var entry := {"time": snappedf(DURATION - remaining, 0.01), "kind": kind, "player": player.player_id if player != null else "", "team": player.team if player != null else -1}

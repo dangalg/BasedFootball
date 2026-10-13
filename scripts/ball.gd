@@ -34,6 +34,17 @@ var touches: int = 0
 var control_block_remaining: float = 0.0
 var control_candidate_id: String = ""
 
+func predict(time: float) -> Vector3:
+	var airborne := global_position.y > RADIUS+.045 or linear_velocity.y > .5
+	var drag := linear_damp+float(ProjectSettings.get_setting("physics/3d/default_linear_damp",.1))
+	if not airborne:
+		drag += .13/mass
+	var position := global_position+linear_velocity*((1-exp(-drag*time))/drag)
+	if airborne:
+		position.y -= 9.8/drag*(time-(1-exp(-drag*time))/drag)
+	position.y=maxf(RADIUS,position.y)
+	return position
+
 func _physics_process(delta: float) -> void:
 	control_block_remaining = maxf(0, control_block_remaining - delta)
 

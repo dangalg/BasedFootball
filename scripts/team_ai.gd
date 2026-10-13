@@ -176,8 +176,12 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if lane_clearance(player.global_position, receiver.global_position, players, player.team) < 0.9:
 			if player.loft(ball, pass_direction.normalized(), pass_direction.length()):
 				return "lob"
-		elif player.kick(ball, pass_direction.normalized(), clampf(pass_direction.length() * 1.3, 7, 14), 0.12, "pass"):
-			return "pass"
+		else:
+			var delivery := FootballPassing.delivery(player,receiver,pass_direction.normalized(),"pass",.4)
+			player.planned_receiver_id = receiver.player_id
+			player.planned_receive_point = delivery.point
+			if player.kick(ball,delivery.direction,delivery.strength,.08,"pass"):
+				return "pass"
 	if pressured and player.global_position.x * attack < -9:
 		var clear_direction := Vector3(attack, 0, -signf(player.global_position.z) * 0.45).normalized()
 		if player.kick(ball, clear_direction, 15, 1.2, "clear"):
@@ -192,11 +196,7 @@ static func _intercept(player: FootballPlayer, ball: FootballBall) -> Vector3:
 	var target := ball.global_position
 	for step in range(1, 26):
 		var time := step * 0.1
-		var predicted := ball.global_position + ball.linear_velocity * time
-		if ball.global_position.y > 0.2 or ball.linear_velocity.y > 1:
-			predicted.y -= 4.9 * time * time
-		else:
-			predicted.y = FootballBall.RADIUS
+		var predicted := ball.predict(time)
 		predicted.x = _rebound(predicted.x, 17.89)
 		predicted.z = _rebound(predicted.z, 11.89)
 		target = pursuit_target(predicted)
