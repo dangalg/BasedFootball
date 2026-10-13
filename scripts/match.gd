@@ -32,6 +32,7 @@ var decision_driver: Node
 var pause_states: Array[Dictionary] = []
 var goal_flow := FootballGoalFlow.new()
 var referee := FootballReferee.new()
+var team_coordinator := FootballTeamCoordinator.new()
 
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
@@ -390,6 +391,7 @@ func _physics_process(delta: float) -> void:
 	if goal_flow.active:
 		goal_flow.tick(delta)
 		return
+	team_coordinator.update(players,ball,controlled,delta)
 	for player in players:
 		if player != controlled and not player.sent_off:
 			var action := FootballAI.decide(player, players, ball, delta)

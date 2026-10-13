@@ -5,6 +5,29 @@
   "version": "1.0.0",
   "scenarios": [
     {
+      "id": "team-coordination",
+      "title": "Attack spacing, defensive roles and board contests",
+      "description": "One attack/defence/board sequence then twenty seconds of autonomous match decisions.",
+      "command": {
+        "workingDirectory": ".",
+        "runtime": "node",
+        "executable": "tools/team_coordination_capture.mjs",
+        "arguments": []
+      },
+      "timeoutSeconds": 85,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
+    },
+    {
       "id": "passing-reception",
       "title": "Physical deliveries and active reception",
       "description": "One short/moving/through/lob/back physical kick and reception sequence.",

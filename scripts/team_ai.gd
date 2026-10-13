@@ -63,7 +63,14 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if teammate_holder == null:
 			teammate_holder = receiver
 	var target := ball.global_position
-	if receiver == player:
+	if player.tactical_role != "":
+		for teammate in players:
+			if teammate.player_id==player.tactical_chaser_id:
+				nearest=teammate
+		own_possession=player.tactical_own_possession
+		player.team_role=player.tactical_role
+		target=player.tactical_target
+	elif receiver == player:
 		player.team_role = "receive"
 		target = _intercept(player, ball)
 	elif nearest == player:
@@ -164,7 +171,9 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			if opponent.team != player.team:
 				open = minf(open, opponent.global_position.distance_to(other.global_position))
 		var advance := (other.global_position.x - player.global_position.x) * attack
-		var score := minf(clearance, 3) + minf(open, 4) * 0.45 + advance * 0.18 - other.global_position.distance_to(player.global_position) * 0.08
+		if advance < -.5 and not pressured:
+			continue
+		var score := minf(clearance, 3) + minf(open, 4) * 0.45 + advance * 0.3 - other.global_position.distance_to(player.global_position) * 0.08
 		score += player.ai_rng.randf_range(-0.3, 0.3)
 		if score > best:
 			best = score
