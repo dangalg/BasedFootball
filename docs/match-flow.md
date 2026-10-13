@@ -1,11 +1,11 @@
 # Restarts and refereeing
 
 The courtyard keeps its 3v3, rebound-board and no-keeper format. Restart spacing
-uses the standard 9.15 metres. Formation targets are AI choices, not player rules.
+uses the standard 3.0 metres. Formation targets are AI choices, not player rules.
 
 At kickoff, everyone except the taker stays in their own half; opponents also
 stay outside the centre circle. At a free kick, teammates may move anywhere,
-while opponents stay at least 9.15 metres away (or on their own goal line between
+while opponents stay at least 3.0 metres away (or on their own goal line between
 the posts). Being legally positioned away from an AI target never earns a card.
 The referee checks visible infringements, not invisible exclusion zones.
 

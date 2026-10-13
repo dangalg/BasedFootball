@@ -31,3 +31,5 @@ Attacking options must stay over 4 metres apart in at least 75% of applicable
 samples. The fixture also requires physical contacts and board retrieval.
 This establishes bounded spacing observations, not comprehensive tactical
 quality or subjective fun.
+
+Role areas shift with the ball: Runner ahead and wide, Creator diagonally behind, Anchor deeper. Support candidates are searched around these areas; receiving and pursuit can override them. The referee selects an offset observation position outside player-to-goal and teammate passing lanes, and physically yields around nearby players.

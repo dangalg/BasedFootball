@@ -73,6 +73,10 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 			if candidate==chaser:
 				continue
 			var cost:=candidate.global_position.distance_to(own_goal)
+			if candidate.role=="Anchor":
+				cost-=3
+			if candidate==controlled and candidate.intent.length_squared()<.01:
+				cost+=3
 			if roles.get(candidate.player_id,"")=="cover":
 				cost-=2.0
 			if cost<cover_cost:
@@ -90,8 +94,8 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 				elif holder!=null and holder.team!=team:
 					player.tactical_target=holder.global_position+(own_goal-holder.global_position).normalized()*.9
 			elif attacking:
-				player.tactical_role="run" if support_index==0 else "support"
-				player.tactical_target=_open_space(player,chaser,players,attack,support_index)
+				player.tactical_role="run" if player.role=="Runner" else "support"
+				player.tactical_target=_open_space(player,chaser,players,attack,0 if player.role=="Runner" else 1)
 				support_index+=1
 			else:
 				player.tactical_role="cover" if player==cover else "mark"
@@ -130,9 +134,10 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 func _open_space(player: FootballPlayer, carrier: FootballPlayer, players: Array[FootballPlayer], attack: float, slot: int) -> Vector3:
 	var best:=-INF
 	var chosen:=player.global_position
-	for advance in ([3.5,6.0] if slot==0 else [-2.5,.5]):
-		for lateral in ([-5.0,-3.5] if slot==0 else [3.5,5.0]):
-			var candidate:=carrier.global_position+Vector3(attack*advance,0,lateral)
+	var home:=role_area(player,carrier.global_position)
+	for advance in [-2.0,0.0,2.0]:
+		for lateral in [-2.0,0.0,2.0]:
+			var candidate:=home+Vector3(attack*advance,0,lateral)
 			candidate.x=clampf(candidate.x,-16,16)
 			candidate.z=clampf(candidate.z,-10,10)
 			var score:=FootballAI.lane_clearance(carrier.global_position,candidate,players,player.team)*2
@@ -148,6 +153,16 @@ func _open_space(player: FootballPlayer, carrier: FootballPlayer, players: Array
 				best=score
 				chosen=candidate
 	return chosen
+
+static func role_area(player: FootballPlayer, ball_position: Vector3) -> Vector3:
+	var attack:=1.0 if player.team==0 else -1.0
+	var progress:=ball_position.x*attack
+	var side: float = -1 if ball_position.z>=0 else 1
+	if player.role=="Anchor":
+		return Vector3(attack*clampf(progress-6,-14,4),0,clampf(ball_position.z*.35,-4,4))
+	if player.role=="Creator":
+		return Vector3(attack*clampf(progress-1,-10,10),0,clampf(ball_position.z*.35-side*4,-8,8))
+	return Vector3(attack*clampf(progress+4,-5,15),0,clampf(ball_position.z*.25+side*5,-9,9))
 
 func _carry_route(player: FootballPlayer, players: Array[FootballPlayer], attack: float) -> Vector3:
 	var best:=-INF

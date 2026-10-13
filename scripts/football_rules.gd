@@ -1,7 +1,9 @@
 class_name FootballRules
 extends RefCounted
 
-const RESTART_DISTANCE := 9.15
+const CENTRE_RADIUS := 3.0
+const PENALTY_RADIUS := 6.0
+const RESTART_DISTANCE := 3.0
 
 static func illegal_position(position: Vector3, team: int, taking_team: int, taker: bool, kind: String, spot: Vector3) -> String:
 	if taker:
@@ -13,7 +15,7 @@ static func illegal_position(position: Vector3, team: int, taking_team: int, tak
 	if team != taking_team and distance < RESTART_DISTANCE - .05:
 		if kind != "kickoff" and position.x * own_side >= 17.8 and absf(position.z) < 2.2:
 			return "" # Defenders may stand on their goal line between the posts.
-		return "respect the 9.15 m distance"
+		return "respect the 3 m distance"
 	return ""
 
 static func contact_grade(kind: String, detail: Dictionary) -> String:

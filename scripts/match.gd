@@ -196,7 +196,12 @@ func _build_pitch() -> void:
 		for height in [0.95, 1.7, 2.6]:
 			FootballArt.box(self, Vector3(44, 0.035, 0.035), Vector3(0, height, side * 18.7), rail)
 	FootballArt.line(self, Vector3(0, 0.015, -11.9), Vector3(0, 0.015, 11.9), 0.07, white)
-	FootballArt.circle(self, FootballRules.RESTART_DISTANCE, Vector3(0, 0.018, 0), white, 0.035)
+	FootballArt.circle(self, FootballRules.CENTRE_RADIUS, Vector3(0, 0.018, 0), white, 0.035)
+	for side in [-1.0,1.0]:
+		for step in range(48):
+			var a: float = -PI/2+step*PI/48
+			var b: float = -PI/2+(step+1)*PI/48
+			FootballArt.line(self,Vector3(side*(18-cos(a)*FootballRules.PENALTY_RADIUS),.02,sin(a)*FootballRules.PENALTY_RADIUS),Vector3(side*(18-cos(b)*FootballRules.PENALTY_RADIUS),.02,sin(b)*FootballRules.PENALTY_RADIUS),.07,white)
 	FootballArt.cylinder(self, 0.12, 0.02, Vector3(0, 0.025, 0), white)
 	# Branding sits on a small board at the far edge, away from the scoreboard.
 	FootballArt.box(self, Vector3(7.6, 1.0, 0.16), Vector3(-10, 1.6, -13), rail)

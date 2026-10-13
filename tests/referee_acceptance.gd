@@ -53,9 +53,9 @@ func _run() -> void:
 	checks["restart_requires_actual_kick"] = game.action_log.any(func(e): return e.kind == "free_kick_ready") and game.goal_flow.runner.completed_kicks > 0
 	checks["ball_released_physically"] = game.ball.linear_velocity.length() > 1
 	checks["no_cards_for_legal_attacker"] = not game.referee.yellow.has(game.players[0].player_id)
-	checks["distance_mark_is_9_15_m"] = true
+	checks["distance_mark_is_3_m"] = true
 	for segment in game.referee.boundary.get_children():
-		checks["distance_mark_is_9_15_m"] = checks["distance_mark_is_9_15_m"] and absf(Vector2(segment.global_position.x,segment.global_position.z).length()-9.15)<.03
+		checks["distance_mark_is_3_m"] = checks["distance_mark_is_3_m"] and absf(Vector2(segment.global_position.x,segment.global_position.z).length()-3.0)<.03
 	checks["line_has_no_collision"] = game.referee.boundary.find_children("*","CollisionShape3D",true,false).is_empty()
 	await _capture("wall_and_distance")
 	stepping = false
@@ -69,7 +69,7 @@ func _run() -> void:
 	checks["kickoff_wrong_half_detected"] = game.goal_flow.position_reason(game.players[0]) == "return to your half"
 	game.players[0].global_position = Vector3(-8,.02,8)
 	game.players[3].global_position = Vector3(4,.02,0)
-	checks["kickoff_distance_detected"] = game.goal_flow.position_reason(game.players[3]) == "respect the 9.15 m distance"
+	checks["kickoff_distance_detected"] = game.goal_flow.position_reason(game.players[3]) == "respect the 3.0 m distance"
 	checks["goal_line_exception"] = FootballRules.illegal_position(Vector3(18,.02,0),1,0,false,"free kick",Vector3(16,0,0)) == ""
 	checks["careless_is_not_automatic_card"] = FootballRules.contact_grade("push_contact",{"speed":8}) == "careless"
 	checks["dangerous_studs_grade"] = FootballRules.contact_grade("slide_body_contact",{"speed":6,"studs_up":true}) == "excessive"

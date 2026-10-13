@@ -78,7 +78,7 @@ func tick(delta: float) -> void:
 		focus = game.ball.global_position
 		if rng.randf() < .25:
 			focus = game.players[rng.randi_range(0,game.players.size()-1)].global_position
-	var destination: Vector3 = game.ball.global_position + Vector3(2.8,0,3.4)
+	var destination: Vector3 = observation_target()
 	if mark_state != "":
 		destination = _mark_tick(delta)
 	if game.goal_flow.active and game.goal_flow.state != "celebrating":
@@ -90,6 +90,12 @@ func tick(delta: float) -> void:
 	actor.intent = (destination - actor.global_position) * Vector3(1,0,1)
 	var stop_distance := .2 if mark_state != "" else 1.5
 	actor.intent = actor.intent.normalized() * minf(actor.intent.length()*1.3,.3 if mark_state=="drawing" else .85) if actor.intent.length() > stop_distance else Vector3.ZERO
+	if mark_state=="" and not game.goal_flow.active:
+		for player in game.players:
+			var away: Vector3 = (actor.global_position-player.global_position)*Vector3(1,0,1)
+			if away.length()>.05 and away.length()<2:
+				actor.intent+=away.normalized()*(2-away.length())
+		actor.intent=actor.intent.limit_length(1)
 	actor.aim = ((focus - actor.global_position) * Vector3(1,0,1)).normalized()
 	actor.emotion = "ref_card" if card.visible else "ref_warn" if gesture_remaining > 0 else ""
 	if mark_state == "drawing":
@@ -98,6 +104,36 @@ func tick(delta: float) -> void:
 		card.hide()
 		gesture_target = null
 	_tick_sendoffs()
+
+func observation_target() -> Vector3:
+	var chosen:=actor.global_position
+	var best:=-INF
+	for x in [-4.0,0.0,4.0]:
+		for z in [-7.0,7.0]:
+			var candidate: Vector3 = game.ball.global_position+Vector3(x,0,z)
+			candidate.x=clampf(candidate.x,-16,16)
+			candidate.z=clampf(candidate.z,-10.5,10.5)
+			var score: float = -candidate.distance_to(actor.global_position)*.2
+			for player in game.players:
+				if player.sent_off:
+					continue
+				score-=maxf(0,3-candidate.distance_to(player.global_position))*4
+				var goal:=Vector3(18 if player.team==0 else -18,0,0)
+				var segment: Vector3 = goal-player.global_position
+				var along: float = (candidate-player.global_position).dot(segment)/maxf(.01,segment.length_squared())
+				if along>0 and along<1:
+					score-=maxf(0,2.5-candidate.distance_to(player.global_position+segment*along))*6
+				for teammate in game.players:
+					if teammate==player or teammate.team!=player.team:
+						continue
+					segment=teammate.global_position-player.global_position
+					along=(candidate-player.global_position).dot(segment)/maxf(.01,segment.length_squared())
+					if along>0 and along<1:
+						score-=maxf(0,1.8-candidate.distance_to(player.global_position+segment*along))*3
+			if score>best:
+				best=score
+				chosen=candidate
+	return chosen
 
 func observe(kind: String, detail: Dictionary, offender: FootballPlayer) -> void:
 	if offender.sent_off or kind not in ["push_contact","grab_contact","slide_body_contact"]:

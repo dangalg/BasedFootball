@@ -15,6 +15,8 @@ var captured := 0
 var touch_start := 0
 var finite := true
 var idle := true
+var referee_blocked := 0
+var referee_samples := 0
 
 func begin(node: Node3D) -> void:
 	game=node
@@ -23,6 +25,8 @@ func begin(node: Node3D) -> void:
 	game.camera.position=Vector3(0,34,29)
 	game.camera.look_at(Vector3.ZERO)
 	game.team_coordinator.rng.seed=48013
+	game.referee.actor.freeze=false
+	game.referee.rng.seed=8411
 	_next()
 
 func _next() -> void:
@@ -96,6 +100,7 @@ func _physics_process(delta: float) -> void:
 		game.referee.tick(delta)
 		game.goal_flow.tick(delta)
 	else:
+		game.referee.tick(delta)
 		for p in game.players:
 			if p!=game.controlled:
 				FootballAI.decide(p,game.players,game.ball,delta)
@@ -131,6 +136,14 @@ func _sample() -> void:
 		streaks=[0.0,0.0]
 		return
 	metric.samples+=1
+	referee_samples+=1
+	var source: Vector3 = game.controlled.global_position*Vector3(1,0,1)
+	var goal:=Vector3(18,0,0)
+	var segment:=goal-source
+	var ref_point: Vector3 = game.referee.actor.global_position*Vector3(1,0,1)
+	var along:=clampf((ref_point-source).dot(segment)/segment.length_squared(),0,1)
+	if along>.03 and along<.98 and ref_point.distance_to(source+segment*along)<1.2:
+		referee_blocked+=1
 	for team in range(2):
 		if near[team]==3:
 			metric.crowded_team_samples+=1
@@ -158,6 +171,13 @@ func _capture(label: String) -> void:
 func _finish() -> void:
 	set_physics_process(false)
 	checks["human_has_no_movement_decisions"]=idle
+	checks["small_pitch_marking_constants"]=FootballRules.CENTRE_RADIUS==3 and FootballRules.PENALTY_RADIUS==6 and FootballRules.RESTART_DISTANCE==3
+	checks["referee_avoids_idle_human_goal_lane"]=referee_samples>=120 and float(referee_blocked)/maxi(1,referee_samples)<.15
+	var areas: Array[Vector3]=[]
+	for player in game.players:
+		if player.team==0:
+			areas.append(FootballTeamCoordinator.role_area(player,Vector3.ZERO))
+	checks["roles_have_distinct_home_areas"]=areas[0].x>areas[1].x and areas[1].x>areas[2].x and areas[0].distance_to(areas[1])>5
 	checks["finite_physical_positions"]=finite
 	var total:=0
 	var crowded:=0
