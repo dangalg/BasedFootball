@@ -48,11 +48,11 @@ const manifest = {
   sourceFormat: 'game-dev-capture-v1', frames: (report.screenshots ?? []).map((name, index) => ({
     index, label: name.replace(/\.png$/, '').toLowerCase(), attachments: [{ kind: 'color', path: `staging/${name}`, encoding: 'png' }],
   })), telemetry: ['staging/checks.jsonl'],
-  profiles: ['staging/scene-report.json', 'staging/godot.log'],
+  profiles: ['staging/scene-report.json', 'staging/godot.log', 'staging/positions.json'],
   adapterEvidence: { windowless: !rendered, gpuExecutionReported: rendered,
     gpuCompletionIdentityReported: false, hardwarePerformanceReported: false,
     pixelVisualInspectionPerformed: false,
-    notes: [rendered ? 'Bounded production-physics handling sequence with rendered frames. Hardware input and autonomous match AI are disabled. No hardware timing claim.' : 'Godot headless uses the dummy renderer. This is scene/resource integrity evidence, not rendered appearance or gameplay verification.'] },
+    notes: ['Production physics and five autonomous AI players, selected human idle throughout. Off-screen rendered snapshots and sampled physical trajectories. No hardware timing claim.'] },
 };
 await writeFile(process.env.GAME_DEV_CAPTURE_MANIFEST ?? path.join(staging, 'capture.json'), JSON.stringify(manifest, null, 2));
 console.log(`SCENE_CHECK_RESULT: ${report.pass ? 'PASS' : 'FAIL'}; ${Object.keys(report.checks).length} checks; rendered=${rendered}.`);

@@ -105,7 +105,18 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	player.team_target = target
 	var direction := target - player.global_position
 	direction.y = 0.0
-	player.intent = direction.normalized() if direction.length() > (0.18 if nearest == player else 0.65) else Vector3.ZERO
+	var movement:=direction.normalized()*minf(direction.length()/1.2,1.0) if direction.length()>(.18 if nearest==player else .65) else Vector3.ZERO
+	# Yield around teammates en route to a tactical position. The ball contender
+	# keeps its contact approach; no positional correction or collision bypass.
+	if nearest!=player:
+		for teammate in players:
+			if teammate==player or teammate.team!=player.team or teammate.sent_off:
+				continue
+			var separation:=player.global_position-teammate.global_position
+			separation.y=0
+			if separation.length()>.05 and separation.length()<1.6:
+				movement+=separation.normalized()*(1.6-separation.length())*.7
+	player.intent = movement.limit_length(1.0)
 	player.aim = player.intent if player.intent.length_squared() > 0.1 else Vector3(attack, 0, 0)
 	player.sprint = nearest == player and direction.length() > 4 and player.energy > 0.25 and confidence < 0.85
 	# Defenders use the same finite contact windows and recovery as the controller.

@@ -4,17 +4,21 @@ extends RefCounted
 var rng := RandomNumberGenerator.new()
 var remaining := 0.0
 var chasers: Dictionary = {}
+var roles: Dictionary = {}
+var possession_team := -1
+var possession_age := 10.0
 
 func _init() -> void:
 	rng.randomize()
 
 func update(players: Array[FootballPlayer], ball: FootballBall, controlled: FootballPlayer, delta: float) -> void:
+	possession_age+=delta
 	remaining-=delta
 	if remaining>0:
 		return
 	remaining=rng.randf_range(.16,.24)
 	var holder: FootballPlayer
-	var closest:=1.35
+	var closest:=1.15
 	for player in players:
 		if player.sent_off or not player.upright_ready():
 			continue
@@ -22,6 +26,9 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 		if gap<closest:
 			closest=gap
 			holder=player
+	if holder!=null:
+		possession_team=holder.team
+		possession_age=0
 	for team in range(2):
 		var squad: Array[FootballPlayer]=[]
 		var threats: Array[FootballPlayer]=[]
@@ -44,7 +51,7 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 			var cost:=player.global_position.distance_to(ball.global_position)/player.pace
 			if player.player_id==chasers.get(team,""):
 				cost-=.18
-			if player==controlled and player.global_position.distance_to(ball.global_position)>2:
+			if player==controlled and holder!=player and player.intent.length_squared()<.01:
 				cost+=1.5
 			if player.incoming_pass_remaining>0 and ball.last_touch_id==player.incoming_pass_from:
 				cost-=3
@@ -56,8 +63,21 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 		if chaser==null:
 			continue
 		chasers[team]=chaser.player_id
-		var attacking:=holder!=null and holder.team==team or chaser.incoming_pass_remaining>0 and ball.last_touch_team==team
+		var attacking: bool = holder!=null and holder.team==team or chaser.incoming_pass_remaining>0 and ball.last_touch_team==team or holder==null and possession_team==team and possession_age<.8
 		threats.sort_custom(func(a: FootballPlayer,b: FootballPlayer): return a.global_position.distance_squared_to(own_goal)<b.global_position.distance_squared_to(own_goal))
+		# Pick the covering player by suitability, retaining that job when costs are
+		# close. Array order must not decide who abandons an opponent to chase.
+		var cover: FootballPlayer
+		var cover_cost:=INF
+		for candidate in squad:
+			if candidate==chaser:
+				continue
+			var cost:=candidate.global_position.distance_to(own_goal)
+			if roles.get(candidate.player_id,"")=="cover":
+				cost-=2.0
+			if cost<cover_cost:
+				cover_cost=cost
+				cover=candidate
 		var support_index:=0
 		for player in squad:
 			player.tactical_chaser_id=chaser.player_id
@@ -74,18 +94,34 @@ func update(players: Array[FootballPlayer], ball: FootballBall, controlled: Foot
 				player.tactical_target=_open_space(player,chaser,players,attack,support_index)
 				support_index+=1
 			else:
-				player.tactical_role="cover" if support_index==0 else "mark"
+				player.tactical_role="cover" if player==cover else "mark"
 				var carrier_point: Vector3 = holder.global_position if holder!=null else ball.global_position
-				if support_index==0:
-					player.tactical_target=carrier_point+(own_goal-carrier_point).normalized()*2.8+Vector3(0,0,1.2)
+				var depth:=carrier_point.distance_to(own_goal)
+				if player==cover:
+					var distance:=clampf(depth*.4,4.8,7.0)
+					player.tactical_target=carrier_point+(own_goal-carrier_point).normalized()*distance
+					player.tactical_target.z+=-1.5 if carrier_point.z>0 else 1.5
 				elif not threats.is_empty():
 					var threat:=threats[0]
 					player.tactical_target=threat.global_position+(own_goal-threat.global_position).normalized()*1.1
 					if threat.global_position.distance_to(own_goal)>carrier_point.distance_to(own_goal):
-						player.tactical_target=carrier_point.lerp(threat.global_position,.4)+(own_goal-carrier_point).normalized()*.8
+						# Screen the passing lane near its receiver, not beside the carrier.
+						player.tactical_target=threat.global_position.lerp(carrier_point,.18)+(own_goal-threat.global_position).normalized()*1.1
 				else:
 					player.tactical_target=own_goal.lerp(ball.global_position,.45)+Vector3(0,0,(support_index*2-1)*2)
 				support_index+=1
+			if player!=chaser:
+				# Tactical spacing changes intent only. Players can still collide,
+				# be displaced or converge briefly while reacting to a turnover.
+				var gap:=player.tactical_target-ball.global_position
+				gap.y=0
+				var spacing:=3.2 if ball.global_position.distance_to(own_goal)<5 else 4.5
+				if gap.length()<spacing:
+					var away: Vector3 = (own_goal-ball.global_position).normalized() if player==cover and not attacking else Vector3(0,0,-1 if player.shirt_number%2==0 else 1)
+					if gap.length()>.5:
+						away=gap.normalized()
+					player.tactical_target=ball.global_position+away*spacing
+			roles[player.player_id]=player.tactical_role
 			var edge_x:=17.55 if player==chaser else 17.4
 			var edge_z:=11.55 if player==chaser else 11.3
 			player.tactical_target.x=clampf(player.tactical_target.x,-edge_x,edge_x)
