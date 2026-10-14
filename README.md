@@ -46,6 +46,9 @@ back to kickoff. A referee wearing black watches play: unseen offences escape
 punishment, while witnessed fouls and ignored restart warnings can lead to cards
 and send-offs. Ground marks guide players without blocking movement.
 See [goals, restarts and discipline](docs/match-flow.md).
+The foundation work uses [grounded footsteps](docs/movement.md), shared physical
+actions and [touch-ahead running dribbles](docs/football-foundation.md). Candidate
+builds and their off-screen evidence are kept separate from the desktop bundle.
 
 ## Play
 

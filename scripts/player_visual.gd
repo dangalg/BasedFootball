@@ -37,6 +37,29 @@ var movement_blend:=0.0
 var lean_blend:=0.0
 var turn_lean:=0.0
 
+# These are animation contact states, not possession or rigid-body constraints.
+# A stance ankle stays at one world position until the foot lifts. The skeleton
+# and the physical kick checks continue to use these same solved boot anchors.
+const GAIT_ANKLE_HEIGHT := 0.075
+const GAIT_LEG_REACH := 0.735
+var planted_feet: Array[bool] = [false, false]
+var stance_anchors: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
+var stance_yaws: Array[float] = [0.0, 0.0]
+var stance_epochs: Array[int] = [0, 0]
+var swing_progress: Array[float] = [0.0, 0.0]
+var swing_starts: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
+var swing_targets: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
+var swing_durations: Array[float] = [0.2, 0.2]
+var foot_swinging: Array[bool] = [false, false]
+var gait_stride_length := 0.0
+var gait_step_interval := 0.3
+var gait_initialized := false
+var gait_previous_root := Vector3.ZERO
+var gait_step_clock := 0.0
+var gait_next_foot := 0
+var gait_touch_foot := -1
+var gait_active := false
+
 func build(player: Node3D) -> void:
 	# Separate cosmetic randomness never consumes the AI decision generator.
 	motion_rng.seed = absi(str(player.player_id).hash()) + 9173
@@ -186,6 +209,10 @@ func animate(player: Node3D, delta: float) -> void:
 	var shoulder: bool = player.action_kind == "shoulder"
 	var kicking: bool = player.action_kind == "kick"
 	var touching: bool = player.dribble_active
+	var running_touch: bool = touching and player.dribble_technique == "run"
+	# Return the kicking foot to the running gait after its short follow-through.
+	# The ball's catch-up interval must not keep either leg posing at the ball.
+	var touch_override: bool = touching and (not running_touch or not player.dribble_has_hit or player.dribble_elapsed < player.dribble_contact_time + 0.06)
 	var touch_weight := 0.0
 	if touching:
 		if player.dribble_elapsed <= player.dribble_contact_time:
@@ -198,15 +225,17 @@ func animate(player: Node3D, delta: float) -> void:
 	player.body_visual.position.x=0
 	player.body_visual.position.z=0
 	var lower := smoothstep(0, 0.10, player.action_elapsed) if sliding else 0.0
-	var hip_offset := -0.61 * lower if sliding else -0.06 - absf(sin(player.step_phase)) * 0.018 * gait_blend
+	var hip_offset := -0.61 * lower if sliding else lerpf(-0.06, lerpf(-0.12, -0.15, movement_blend), gait_blend) - absf(sin(player.step_phase)) * 0.012 * gait_blend
 	if kicking:
 		hip_offset = -0.22 * smoothstep(0, 0.06, player.action_elapsed)
 	elif standing:
 		hip_offset = -0.20 * sin(clampf(player.action_elapsed / player.action_duration, 0, 1) * PI)
-	elif player.controlling_ball():
+	elif player.controlling_ball() and player.dribble_technique != "run":
 		hip_offset = -0.20
 	elif rising:
 		hip_offset = -0.61 * smoothstep(0, 0.65, player.recovery_remaining)
+	if running_touch and touch_override:
+		hip_offset -= 0.06 * sin(clampf(player.dribble_elapsed / maxf(player.dribble_contact_time + 0.06, 0.01), 0, 1) * PI)
 	if player.hop_active and not player.hop_launched:
 		hip_offset = -0.06 - 0.15 * smoothstep(0, 0.08, player.hop_elapsed)
 	elif player.hop_landing_remaining > 0 and player.action_kind == "":
@@ -240,10 +269,10 @@ func animate(player: Node3D, delta: float) -> void:
 	lean_blend=lerpf(lean_blend,local_velocity.z*.022+clampf(local_acceleration.z*.006,-.12,.12),minf(1,delta*7))
 	upper_body.rotation.x = lerpf(upper_body.rotation.x, -.2 if sliding or rising else lean_blend - (0.18 if standing or kicking else 0.0), minf(1, 12 * delta))
 	upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025+turn_lean, minf(1, 8 * delta))
-	# Jockeying can intentionally backpedal while looking at the ball.
-	var gait_direction := -1.0 if local_velocity.z > 0.1 else 1.0
-	var cadence:=lerpf(3.7,2.65,movement_blend)
-	player.step_phase += velocity.length() * delta * cadence * gait_direction * cadence_style * (1 + variation * 0.035)
+	# Arm rhythm follows the same step timing as the feet; cosmetic variation
+	# never changes an already planted ankle or its world-space toe direction.
+	if velocity.length() > 0.12:
+		player.step_phase += delta * PI / maxf(gait_step_interval, 0.1)
 	var stride := minf(velocity.length() * 0.085, 0.6)
 	var left_swing := sin(player.step_phase) * stride
 	var right_swing := -left_swing
@@ -257,17 +286,16 @@ func animate(player: Node3D, delta: float) -> void:
 	# a negative angle bent both elbows towards the back of the torso.
 	left_elbow.rotation.x = lerpf(.25,.95,movement_blend)+stride*.12
 	right_elbow.rotation.x = lerpf(.28,.92,movement_blend)+stride*.12
-	# Stance travels opposite local motion at ground height; swing lifts the toe.
-	# Both legs use the same IK and boot transforms as physical contact checks.
+	# Root velocity, rather than facing or intent, plans forward, backward and
+	# lateral steps. A turn changes the next landing, not the planted footprint.
 	gait_blend = move_toward(gait_blend, clampf(velocity.length() / 0.8, 0, 1), delta * 7)
-	if not sliding and not standing and not kicking and not rising:
-		_gait_foot(player, false, fposmod(player.step_phase / TAU, 1), local_velocity)
-		_gait_foot(player, true, fposmod(player.step_phase / TAU + 0.5, 1), local_velocity)
+	gait_active = not sliding and not standing and not kicking and not rising and not player.hop_active and not player.getting_up
+	if gait_active:
+		_update_gait(player, velocity, (1 if player.dribble_right else 0) if touch_override else -1)
+	else:
+		_suspend_gait()
 	if kicking or standing or rising:
 		_pose_foot(player, not player.kick_right if kicking else false, player.global_position + player.body_visual.basis * Vector3(-0.12 if not kicking or player.kick_right else 0.12, 0.075, 0.04))
-	elif touching:
-		var support_side := -0.12 if player.dribble_right else 0.12
-		_pose_foot(player, not player.dribble_right, player.global_position + player.body_visual.basis * Vector3(support_side, 0.075, 0.04), touch_weight)
 	if rising:
 		_pose_foot(player, true, player.global_position + player.body_visual.basis * Vector3(0.12, 0.075, -0.04))
 	if sliding:
@@ -292,7 +320,7 @@ func animate(player: Node3D, delta: float) -> void:
 		toe_angle += 0.30 if player.kick_kind == "finesse" else -0.30 if player.kick_kind == "outside" else 0
 		strike_toe = true
 		strike_toe_angle = toe_angle
-	elif touching:
+	elif touch_override:
 		var swing := smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
 		if player.dribble_elapsed > player.dribble_contact_time:
@@ -355,13 +383,14 @@ func animate(player: Node3D, delta: float) -> void:
 		head_pivot.position = head_rest
 	if player.emotion == "ref_draw":
 		var referee = player.get_parent().referee
+		planted_feet[1] = false
 		_pose_foot(player,true,referee._mark_point(referee.mark_progress)+Vector3.UP*.075)
 	_finish_feet(player)
 	if strike_toe:
 		player.strike_boot().global_basis = Basis(Vector3.UP, strike_toe_angle)
 	elif touching:
 		var boot: Node3D = right_boot if player.dribble_right else left_boot
-		if player.dribble_technique == "trap":
+		if player.dribble_technique in ["trap", "pull"]:
 			boot.rotation.x -= 0.18 * touch_weight
 		elif player.dribble_technique in ["inside", "outside"]:
 			boot.rotation.y += (0.32 if player.dribble_technique == "inside" else -0.25) * (1 if player.dribble_right else -1) * touch_weight
@@ -521,13 +550,179 @@ func _limit_rotation(previous: Quaternion, target: Quaternion, max_angle: float)
 	var angle := previous.angle_to(target)
 	return previous.slerp(target, minf(1, max_angle / maxf(angle, 0.00001)))
 
-func _gait_foot(player: Node3D, right: bool, phase: float, local_velocity: Vector3) -> void:
-	var travel := local_velocity.normalized() if local_velocity.length() > 0.05 else Vector3.FORWARD
-	var reach := minf(local_velocity.length() * 0.075, 0.42) * gait_blend * (1 + variation * 0.04)
-	var along := lerpf(reach, -reach, phase / 0.6) if phase < 0.6 else lerpf(-reach, reach, smoothstep(0.6, 1, phase))
-	var lift := 0.0 if phase < 0.6 else sin((phase - 0.6) / 0.4 * PI) * lerpf(0.07, 0.21, clampf(local_velocity.length() / 8, 0, 1)) * gait_blend
-	var target := Vector3(0.105 if right else -0.105, 0.075 + lift, 0) + travel * along
-	_pose_foot(player, right, player.global_position + player.body_visual.basis * target)
+func planted_mask() -> int:
+	return (1 if planted_feet[0] else 0) | (2 if planted_feet[1] else 0)
+
+func touch_foot_ready(right: bool) -> bool:
+	return gait_initialized and not planted_feet[1 if right else 0]
+
+func reset_gait() -> void:
+	# Reset fixtures/restarts may reposition the rigid body before animation.
+	_suspend_gait()
+
+func preferred_dribble_right(ball_world: Vector3, fallback: bool) -> bool:
+	if not gait_initialized:
+		return fallback
+	var scores: Array[float] = []
+	for index in range(2):
+		var boot: Node3D = right_boot if index == 1 else left_boot
+		# Prefer a naturally lifting foot when both can reach the next contact.
+		# A lateral ball still chooses the nearer leg instead of crossing the body.
+		var score: float = boot.global_position.distance_to(ball_world)
+		if planted_feet[index]:
+			score += 0.32
+		scores.append(score)
+	return fallback if absf(scores[0] - scores[1]) < 0.025 else scores[1] < scores[0]
+
+func _suspend_gait() -> void:
+	planted_feet = [false, false]
+	foot_swinging = [false, false]
+	gait_initialized = false
+	gait_touch_foot = -1
+
+func _gait_reset(player: Node3D) -> void:
+	gait_initialized = true
+	gait_step_clock = 0.0
+	gait_next_foot = 1 if style_phase > PI else 0
+	gait_touch_foot = -1
+	for index in range(2):
+		var boot: Node3D = right_boot if index == 1 else left_boot
+		stance_anchors[index] = boot.global_position
+		stance_anchors[index].y = GAIT_ANKLE_HEIGHT
+		stance_yaws[index] = player.body_visual.global_rotation.y
+		stance_epochs[index] += 1
+		planted_feet[index] = true
+		foot_swinging[index] = false
+		swing_progress[index] = 0.0
+	_constrain_stance_hips(player)
+	for index in range(2):
+		stance_anchors[index] = _reachable_ankle(player, index, stance_anchors[index])
+
+func _ground_reach(player: Node3D, index: int) -> float:
+	var leg: Node3D = player.right_leg if index == 1 else player.left_leg
+	var height: float = maxf(0, leg.global_position.y - GAIT_ANKLE_HEIGHT)
+	return sqrt(maxf(0.0, GAIT_LEG_REACH * GAIT_LEG_REACH - height * height))
+
+func _reachable_ankle(player: Node3D, index: int, target: Vector3) -> Vector3:
+	var leg: Node3D = player.right_leg if index == 1 else player.left_leg
+	target.y = maxf(target.y, GAIT_ANKLE_HEIGHT)
+	var vertical: float = target.y - leg.global_position.y
+	var reach: float = sqrt(maxf(0.0, GAIT_LEG_REACH * GAIT_LEG_REACH - vertical * vertical))
+	var horizontal := Vector3(target.x - leg.global_position.x, 0, target.z - leg.global_position.z).limit_length(reach)
+	return Vector3(leg.global_position.x + horizontal.x, target.y, leg.global_position.z + horizontal.z)
+
+func _constrain_stance_hips(player: Node3D) -> void:
+	# Lower the visual pelvis only enough to keep each stance target reachable.
+	# A shove that exceeds a plausible leg span lifts the foot instead of dragging
+	# its footprint or changing the physical character's position/velocity.
+	for index in range(2):
+		if not planted_feet[index]:
+			continue
+		var leg: Node3D = player.right_leg if index == 1 else player.left_leg
+		var offset: Vector3 = stance_anchors[index] - leg.global_position
+		var horizontal_squared: float = offset.x * offset.x + offset.z * offset.z
+		if horizontal_squared > 0.49 * 0.49:
+			planted_feet[index] = false
+			continue
+		var permitted_height: float = stance_anchors[index].y + sqrt(maxf(0.0, GAIT_LEG_REACH * GAIT_LEG_REACH - horizontal_squared))
+		var correction: float = minf(0.0, permitted_height - leg.global_position.y)
+		if player.body_visual.position.y + correction < -0.24:
+			planted_feet[index] = false
+		else:
+			player.body_visual.position.y += correction
+
+func _landing_target(player: Node3D, index: int, velocity: Vector3, time_remaining: float) -> Vector3:
+	var yaw_basis := Basis(Vector3.UP, player.body_visual.global_rotation.y)
+	var lateral := yaw_basis * Vector3(0.105 if index == 1 else -0.105, 0, 0)
+	var travel := velocity.normalized() if velocity.length() > 0.12 else Vector3.ZERO
+	var reach: float = minf(_ground_reach(player, index) * 0.76, 0.34)
+	var target: Vector3 = player.global_position + velocity * time_remaining + lateral + travel * reach
+	target.y = GAIT_ANKLE_HEIGHT
+	return target
+
+func _start_gait_swing(player: Node3D, index: int, velocity: Vector3, duration: float) -> void:
+	var boot: Node3D = right_boot if index == 1 else left_boot
+	planted_feet[index] = false
+	foot_swinging[index] = true
+	swing_progress[index] = 0.0
+	swing_starts[index] = boot.global_position
+	swing_starts[index].y = maxf(GAIT_ANKLE_HEIGHT, swing_starts[index].y)
+	swing_durations[index] = duration
+	swing_targets[index] = _landing_target(player, index, velocity, duration)
+
+func _update_gait(player: Node3D, velocity: Vector3, touch_foot: int) -> void:
+	if not gait_initialized or player.global_position.distance_to(gait_previous_root) > 0.75:
+		_gait_reset(player)
+	gait_previous_root = player.global_position
+	_constrain_stance_hips(player)
+	var speed: float = velocity.length()
+	var stance_duty: float = lerpf(0.64, 0.43, movement_blend)
+	var reach: float = minf(_ground_reach(player, 0), _ground_reach(player, 1)) * 0.76
+	# A full cycle has two steps. Its stance duration must cover the physical
+	# root travel from the leading landing to the trailing release point.
+	gait_step_interval = clampf(reach * cadence_style / (maxf(speed, 0.15) * stance_duty), 0.13, 0.7)
+	gait_stride_length = speed * gait_step_interval
+	var swing_duration: float = clampf(2 * gait_step_interval * (1 - stance_duty), 0.13, 0.32)
+	if touch_foot != gait_touch_foot:
+		if gait_touch_foot >= 0:
+			_start_gait_swing(player, gait_touch_foot, velocity, swing_duration)
+		gait_touch_foot = touch_foot
+		if touch_foot >= 0:
+			gait_next_foot = 1 - touch_foot
+			gait_step_clock = 0.0
+	if touch_foot >= 0:
+		planted_feet[touch_foot] = false
+		foot_swinging[touch_foot] = false
+		swing_progress[touch_foot] = 0.0
+	if speed > 0.12:
+		gait_step_clock += frame_delta
+	else:
+		gait_step_clock = 0.0
+	for index in range(2):
+		if index == touch_foot:
+			continue
+		var leg: Node3D = player.right_leg if index == 1 else player.left_leg
+		var trailing: float = (leg.global_position - stance_anchors[index]).dot(velocity.normalized()) if speed > 0.12 else 0.0
+		var must_lift: bool = not planted_feet[index] and not foot_swinging[index]
+		if planted_feet[index] and speed > 0.12 and trailing > _ground_reach(player, index) * 0.8:
+			must_lift = true
+		# At a stop or an on-the-spot turn, reposition one foot at a time. The
+		# support anchor is retained until the other foot has landed.
+		if planted_feet[index] and speed <= 0.12 and not foot_swinging[1 - index]:
+			var neutral: Vector3 = _landing_target(player, index, Vector3.ZERO, 0)
+			var footprint_error: float = Vector2(neutral.x - stance_anchors[index].x, neutral.z - stance_anchors[index].z).length()
+			must_lift = footprint_error > 0.14 or absf(wrapf(player.body_visual.global_rotation.y - stance_yaws[index], -PI, PI)) > 0.55
+		if must_lift:
+			_start_gait_swing(player, index, velocity, swing_duration)
+	if speed > 0.12 and gait_step_clock >= gait_step_interval and gait_next_foot != touch_foot and planted_feet[gait_next_foot]:
+		_start_gait_swing(player, gait_next_foot, velocity, swing_duration)
+		gait_step_clock = 0.0
+		gait_next_foot = 1 - gait_next_foot
+	for index in range(2):
+		if index == touch_foot:
+			continue
+		if foot_swinging[index]:
+			swing_progress[index] = minf(1.0, swing_progress[index] + frame_delta / swing_durations[index])
+			var progress: float = swing_progress[index]
+			if progress < 0.8:
+				var remaining: float = (1 - progress) * swing_durations[index]
+				swing_targets[index] = swing_targets[index].lerp(_landing_target(player, index, velocity, remaining), minf(1, frame_delta * 12))
+			var target: Vector3 = swing_starts[index].lerp(swing_targets[index], smoothstep(0, 1, progress))
+			target.y += sin(progress * PI) * lerpf(0.075, 0.17, movement_blend)
+			target = _reachable_ankle(player, index, target)
+			if progress >= 1.0:
+				stance_anchors[index] = target
+				stance_anchors[index].y = GAIT_ANKLE_HEIGHT
+				stance_anchors[index] = _reachable_ankle(player, index, stance_anchors[index])
+				stance_yaws[index] = player.body_visual.global_rotation.y
+				stance_epochs[index] += 1
+				planted_feet[index] = true
+				foot_swinging[index] = false
+				_pose_foot(player, index == 1, stance_anchors[index])
+			else:
+				_pose_foot(player, index == 1, target)
+		elif planted_feet[index]:
+			_pose_foot(player, index == 1, stance_anchors[index])
 
 func _pose_foot(player: Node3D, right: bool, target_world: Vector3, weight: float = 1.0) -> void:
 	# Blend endpoints, not independent joints: joint interpolation can send the
@@ -550,10 +745,14 @@ func _finish_feet(player: Node3D) -> void:
 		source.y = maxf(source.y, 0.075)
 		var requested: Vector3 = foot_targets[index] if foot_requested[index] else source
 		var speed := 20.0 if player.action_kind != "" else 16.0 if player.dribble_active else 8.0
-		var target := source.move_toward(requested, speed * frame_delta)
+		# A planted target is already smooth in world space: interpolating it
+		# from the root-moved boot each tick would recreate skating. Gait swings
+		# likewise have their own continuous lift/landing trajectory.
+		var anchored: bool = gait_active and planted_feet[index]
+		var target: Vector3 = stance_anchors[index] if anchored else requested if gait_active and foot_swinging[index] else source.move_toward(requested, speed * frame_delta)
 		target.y = maxf(target.y, 0.075)
 		var pose := _leg_solution(player, right, target)
-		if player.action_kind == "":
+		if player.action_kind == "" and not anchored and not (gait_active and foot_swinging[index]):
 			# Reduce the endpoint step when needed, retaining a grounded solution.
 			var angle: float = maxf(leg.quaternion.angle_to(pose[0]), knee.quaternion.angle_to(pose[1]))
 			var fraction := 1.0
@@ -566,6 +765,8 @@ func _finish_feet(player: Node3D) -> void:
 		leg.quaternion = pose[0]
 		knee.quaternion = pose[1]
 		boot.quaternion = pose[2]
+		if anchored:
+			boot.global_basis = Basis(Vector3.UP, stance_yaws[index])
 
 func _leg_solution(player: Node3D, right: bool, target_world: Vector3) -> Array:
 	var leg: Node3D = player.right_leg if right else player.left_leg

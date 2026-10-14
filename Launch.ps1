@@ -1,4 +1,4 @@
-param([switch]$Build, [switch]$Acceptance, [switch]$DribbleAcceptance, [switch]$Editor)
+param([switch]$Build, [switch]$Acceptance, [switch]$DribbleAcceptance, [switch]$Editor, [string]$OutputDirectory = 'build')
 $ErrorActionPreference = 'Stop'
 $taskEnginePath = 'C:\Program Files\Godot\Godot_v4.6.1-stable_mono_win64\Godot_v4.6.1-stable_mono_win64_console.exe'
 if ($env:GODOT_EXE) { $taskEnginePath = $env:GODOT_EXE }
@@ -7,7 +7,8 @@ $taskEvidencePath = Join-Path $PSScriptRoot 'evidence'
 New-Item -ItemType Directory -Path $taskEvidencePath -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $taskEvidencePath '.gdignore') -Value ''
 if ($Build) {
-    $taskBuildPath = Join-Path $PSScriptRoot 'build'
+    $taskBuildPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $OutputDirectory))
+    if (-not $taskBuildPath.StartsWith(([IO.Path]::GetFullPath($PSScriptRoot) + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) { throw 'Build output must stay inside the project.' }
     New-Item -ItemType Directory -Path $taskBuildPath -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $taskBuildPath '.gdignore') -Value ''
     $taskBuildLog = Join-Path $taskEvidencePath 'build.log'

@@ -3,9 +3,39 @@ extends RefCounted
 
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
+static var preparing_passes: Dictionary = {}
+
+static func clear_plans() -> void:
+	for plan in preparing_passes.values():
+		if is_instance_valid(plan.player):
+			plan.player.retrieval_positioning=false
+			plan.player.restart_settle=false
+			plan.player.restart_touch_velocity=Vector3.ZERO
+	preparing_passes.clear()
+
+static func preparation_for(player: FootballPlayer) -> Dictionary:
+	return preparing_passes.get(player.get_instance_id(),{})
+
+static func release_control(player: FootballPlayer) -> void:
+	# A human taking over supplies their own movement and ball-control intent.
+	# Keep any already accepted physical kick and its immutable metadata intact.
+	_cancel_pass(player)
+
 static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float) -> String:
-	if player.ragdoll != null or player.hop_active:
+	if player.sent_off or player.ragdoll != null or player.hop_active:
+		_cancel_pass(player)
 		return ""
+	# An accepted action owns its metadata until physical contact or recovery.
+	if player.action_kind!="" or player.recovery_remaining>0 or player.stagger_remaining>0:
+		return ""
+	if player.receive_hold_remaining>0:
+		if ball.last_touch_id==player.player_id:
+			_stabilize_ball(player,ball)
+			return ""
+		player.receive_hold_remaining=0
+	if not preparing_passes.has(player.get_instance_id()):
+		player.restart_settle=false
+		player.restart_touch_velocity=Vector3.ZERO
 	player.reaction_timer -= delta
 	if player.reaction_timer > 0.0:
 		return ""
@@ -27,76 +57,22 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	var attack := 1.0 if player.team == 0 else -1.0
 	var goal := Vector3(attack * 18.8, 0.28, 0)
 	var nearest: FootballPlayer = null
-	var nearest_distance := INF
-	var teammate_holder: FootballPlayer = null
-	for other in players:
-		if other.team != player.team or not other.upright_ready():
-			continue
-		var distance := other.global_position.distance_to(ball.global_position)
-		# Small continuity preference prevents two teammates exchanging pursuit.
-		if other.team_role in ["press", "receive"]:
-			distance -= 0.4
-		if distance < nearest_distance:
-			nearest_distance = distance
-			nearest = other
-		if other.reach_ball(ball, 0.9):
-			teammate_holder = other
-	var opponent_holder: FootballPlayer = null
-	var opponent_distance := INF
-	for other in players:
-		if other.team != player.team and other.upright_ready():
-			var distance := other.global_position.distance_to(ball.global_position)
-			if distance < opponent_distance:
-				opponent_distance = distance
-				opponent_holder = other
-	var own_possession: bool = teammate_holder != null and nearest_distance <= opponent_distance and ball.global_position.y < 0.5
-	var receiver: FootballPlayer = null
+	# Coordinator jobs have one owner; no second nearest-player election here.
+	if player.tactical_role=="":
+		player.intent=Vector3.ZERO
+		return ""
 	for teammate in players:
-		if teammate.team == player.team and teammate.incoming_pass_remaining > 0:
-			if not teammate.upright_ready() or ball.last_touch_id != teammate.incoming_pass_from:
-				teammate.incoming_pass_remaining = 0
-			else:
-				receiver = teammate
-	if receiver != null:
-		nearest = receiver
-		own_possession = true
-		if teammate_holder == null:
-			teammate_holder = receiver
-	var target := ball.global_position
-	if player.tactical_role != "":
-		for teammate in players:
-			if teammate.player_id==player.tactical_chaser_id:
-				nearest=teammate
-		own_possession=player.tactical_own_possession
-		player.team_role=player.tactical_role
-		target=player.tactical_target
-	elif receiver == player:
-		player.team_role = "receive"
-		target = _intercept(player, ball)
-	elif nearest == player:
-		player.team_role = "carry" if own_possession else "press"
-		var goal_direction := (goal - ball.global_position).normalized()
-		target = goal if own_possession else ball.global_position - goal_direction * 0.65 + ball.linear_velocity * 0.12
-	elif own_possession:
-		player.team_role = "support"
-		target = _support_position(player, teammate_holder, players, attack)
-	else:
-		var own_goal := Vector3(-attack * 17.5, 0, 0)
-		if player.shirt_number == 4:
-			player.team_role = "cover"
-			target = own_goal.lerp(ball.global_position, 0.28)
-		else:
-			player.team_role = "mark"
-			var threat: FootballPlayer = null
-			var danger := INF
-			for other in players:
-				if other.team != player.team and other != opponent_holder:
-					var distance := other.global_position.distance_to(own_goal)
-					if distance < danger:
-						threat = other
-						danger = distance
-			target = threat.global_position.lerp(ball.global_position, 0.22) if threat != null else own_goal.lerp(ball.global_position, 0.5)
-			target += (own_goal - target).normalized() * 0.8
+		if teammate.player_id==player.tactical_chaser_id:
+			nearest=teammate
+	player.team_role=player.tactical_role
+	var target:=player.tactical_target
+	var receiving:=player.incoming_pass_remaining>0 and ball.last_touch_id==player.incoming_pass_from
+	if receiving:
+		_cancel_pass(player)
+		return _receive(player,ball)
+	if preparing_passes.has(player.get_instance_id()):
+		return _prepare_pass(player,ball)
+	player.retrieval_positioning=false
 	if nearest == player:
 		target = pursuit_target(target)
 	else:
@@ -147,7 +123,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		elif ball_offset.length() < 2.6 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
 			if confidence < 0.35 + player.ai_style * 0.35 and player.slide(ball):
 				return "slide"
-	if nearest != player or not player.reach_ball(ball):
+	if nearest != player or not player.reach_ball(ball) or ball.last_touch_id!=player.player_id or player.receive_hold_remaining>0:
 		return ""
 	var inward := Vector3.ZERO
 	if absf(ball.global_position.z) > 11.1:
@@ -166,46 +142,138 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		var kind := "finesse" if blocked else "power" if confidence < 0.18 and absf(goal.x - player.global_position.x) > 6 else "shot"
 		if confidence < 0.60 and player.kick(ball, player.aim.rotated(Vector3.UP, player.ai_rng.randf_range(-0.045, 0.045) / player.touch_skill), player.ai_rng.randf_range(22, 27) if kind == "power" else player.ai_rng.randf_range(16, 19), player.ai_rng.randf_range(1.0, 1.6), kind):
 			return kind
-	# A defender under pressure finds an advanced teammate, using the same kick.
+	# Useful lanes can be sideways or backward. A return combination is an
+	# option evaluated against defenders and space, never a forced outcome.
 	var pressured := false
 	for opponent in players:
 		if opponent.team != player.team and opponent.global_position.distance_to(player.global_position) < 2.1:
 			pressured = true
-	receiver = null
+	var receiver: FootballPlayer
 	var best := -INF
 	for other in players:
 		if other == player or other.team != player.team or not other.upright_ready():
 			continue
-		var clearance := lane_clearance(player.global_position, other.global_position, players, player.team)
+		var clearance := lane_clearance(ball.global_position, other.global_position, players, player.team)
 		var open := INF
 		for opponent in players:
 			if opponent.team != player.team:
 				open = minf(open, opponent.global_position.distance_to(other.global_position))
 		var advance := (other.global_position.x - player.global_position.x) * attack
-		if advance < -.5 and not pressured:
-			continue
-		var score := minf(clearance, 3) + minf(open, 4) * 0.45 + advance * 0.3 - other.global_position.distance_to(player.global_position) * 0.08
+		var score := minf(clearance,3)+minf(open,4)*(.7 if pressured else .45)+clampf(advance*.3,-1,2)-other.global_position.distance_to(player.global_position)*.1
+		score-=maxf(0,1.2-clearance)*6
+		if player.combination_remaining>0 and other.player_id==player.last_pass_from:
+			score+=1.8 if clearance>1.1 else .3
 		score += player.ai_rng.randf_range(-0.3, 0.3)
 		if score > best:
 			best = score
 			receiver = other
-	if receiver != null and confidence < (0.85 if pressured else 0.38) and best > 1.1:
-		var pass_direction := receiver.global_position + receiver.linear_velocity * 0.35 - player.global_position
-		pass_direction.y = 0
-		pass_direction = pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / player.touch_skill)
-		if lane_clearance(player.global_position, receiver.global_position, players, player.team) < 0.9:
-			if player.loft(ball, pass_direction.normalized(), pass_direction.length()):
-				return "lob"
-		else:
-			var delivery := FootballPassing.delivery(player,receiver,pass_direction.normalized(),"pass",.4)
-			player.planned_receiver_id = receiver.player_id
-			player.planned_receive_point = delivery.point
-			if player.kick(ball,delivery.direction,delivery.strength,.08,"pass"):
-				return "pass"
+	if receiver!=null and confidence<(.85 if pressured else .72 if player.combination_remaining>0 else .48) and best>1.1:
+		var kind:="lob" if lane_clearance(ball.global_position,receiver.global_position,players,player.team)<.9 else "pass"
+		preparing_passes[player.get_instance_id()]={"player":player,"receiver":receiver,"receive_point":receiver.global_position,"kind":kind,"power":player.ai_rng.randf_range(.38,.45),"phase":"stop","age":0.0}
+		return _prepare_pass(player,ball)
 	if pressured and player.global_position.x * attack < -9:
 		var clear_direction := Vector3(attack, 0, -signf(player.global_position.z) * 0.45).normalized()
 		if player.kick(ball, clear_direction, 15, 1.2, "clear"):
 			return "clear"
+	return ""
+
+static func _cancel_pass(player: FootballPlayer) -> void:
+	preparing_passes.erase(player.get_instance_id())
+	player.retrieval_positioning=false
+	player.restart_settle=false
+	player.restart_touch_velocity=Vector3.ZERO
+
+static func _stabilize_ball(player: FootballPlayer, ball: FootballBall) -> bool:
+	var gap: Vector3=(ball.global_position-player.global_position)*Vector3(1,0,1)
+	player.retrieval_positioning=false
+	player.restart_settle=true
+	player.restart_touch_velocity=Vector3.ZERO
+	player.sprint=false
+	player.aim=gap.normalized() if gap.length_squared()>.001 else player.aim
+	# Continue to a reachable foot position rather than stopping at the edge
+	# of the broad capsule-control radius. Only contact can stop the ball.
+	player.intent=gap.normalized()*minf((gap.length()-.58)*1.8,.65) if gap.length()>.66 else Vector3.ZERO
+	return gap.length()<.72 and ball.linear_velocity.length()<.22 and (player.linear_velocity*Vector3(1,0,1)).length()<.6
+
+static func _receive(player: FootballPlayer, ball: FootballBall) -> String:
+	var target:=receive_target(player,ball)
+	var offset: Vector3=(target-player.global_position)*Vector3(1,0,1)
+	var ball_offset: Vector3=(ball.global_position-player.global_position)*Vector3(1,0,1)
+	player.team_target=target
+	player.sprint=offset.length()>4 and player.energy>.25
+	player.aim=ball_offset.normalized() if ball_offset.length_squared()>.001 else player.aim
+	# Brake into the incoming trajectory. Only the swept receiving foot can
+	# finish the reception; proximity cannot authorize the next shot or pass.
+	if ball_offset.length()<1.05:
+		player.sprint=false
+		player.intent=offset.normalized()*minf(offset.length()*.65,.3) if ball_offset.length()>.7 else Vector3.ZERO
+	else:
+		player.intent=offset.normalized()*minf(offset.length()/1.2,1.0) if offset.length()>.12 else Vector3.ZERO
+	return ""
+
+static func receive_target(player: FootballPlayer, ball: FootballBall) -> Vector3:
+	var travel: Vector3=ball.linear_velocity*Vector3(1,0,1)
+	var target:=_intercept(player,ball)
+	if player.incoming_pass_remaining>0 and player.incoming_receive_point.is_finite():
+		var planned:=pursuit_target(player.incoming_receive_point)
+		if ball.global_position.y>.65:
+			target=planned
+		elif player.global_position.distance_to(ball.global_position)>2.5:
+			target=target.lerp(planned,.15)
+	return pursuit_target(target+travel.normalized()*.45)
+
+static func _prepare_pass(player: FootballPlayer, ball: FootballBall) -> String:
+	var plan: Dictionary=preparing_passes.get(player.get_instance_id(),{})
+	if plan.is_empty():
+		return ""
+	var recipient: FootballPlayer=plan.receiver
+	plan.age+=player.reaction_timer
+	if not is_instance_valid(recipient) or recipient.sent_off or not recipient.upright_ready() or ball.last_touch_id!=player.player_id or float(plan.age)>2.5 or (ball.global_position-player.global_position).length()>1.8:
+		_cancel_pass(player)
+		return ""
+	var direction: Vector3=(recipient.global_position-ball.global_position)*Vector3(1,0,1)
+	if direction.length()<1:
+		_cancel_pass(player)
+		return ""
+	direction=direction.normalized()
+	var gap: Vector3=(ball.global_position-player.global_position)*Vector3(1,0,1)
+	# A sidestep cannot catch an outward-moving ball. First plant and trap it
+	# through the ordinary foot sweep, then walk around the stationary ball.
+	if plan.phase=="stop" or ball.linear_velocity.length()>.35:
+		plan.phase="stop"
+		if not _stabilize_ball(player,ball):
+			return ""
+		plan.phase="stance"
+	player.restart_settle=false
+	player.restart_touch_velocity=Vector3.ZERO
+	var side:=direction.cross(Vector3.UP)
+	if plan.phase=="stance" and gap.dot(direction)<.18 and gap.length()<1.3:
+		plan.phase="around"
+		plan.side=1.0 if (player.global_position-ball.global_position).dot(side)>=0 else -1.0
+	var target:=ball.global_position-direction*.6
+	if plan.phase=="around":
+		target=ball.global_position+side*float(plan.side)*.95
+		if ((target-player.global_position)*Vector3(1,0,1)).length()<.16:
+			plan.phase="behind"
+			target=ball.global_position-direction*.6
+	var offset: Vector3=(target-player.global_position)*Vector3(1,0,1)
+	player.retrieval_positioning=true
+	player.team_target=target
+	player.sprint=false
+	player.aim=direction
+	player.intent=offset.normalized()*minf(offset.length()*1.8,.55) if offset.length()>.07 else Vector3.ZERO
+	if offset.length()>.13 or gap.dot(direction)<.4 or absf(gap.dot(side))>.2 or not player.reach_ball(ball) or (player.linear_velocity*Vector3(1,0,1)).length()>1.0:
+		return ""
+	var delivery:=FootballPassing.delivery(player,recipient,direction,plan.kind,float(plan.power),ball.global_position)
+	player.planned_receiver_id=recipient.player_id
+	player.planned_receive_point=delivery.point
+	var scheduled: bool=player.loft(ball,delivery.direction,delivery.distance) if plan.kind=="lob" else player.kick(ball,delivery.direction,delivery.strength,.08,"pass")
+	if scheduled:
+		preparing_passes.erase(player.get_instance_id())
+		player.retrieval_positioning=false
+		player.restart_settle=false
+		player.restart_touch_velocity=Vector3.ZERO
+		return plan.kind
 	return ""
 
 static func pursuit_target(target: Vector3) -> Vector3:

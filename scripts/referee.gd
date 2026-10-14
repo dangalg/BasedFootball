@@ -23,6 +23,16 @@ var mark_angle := 0.0
 var mark_progress := 0.0
 var drawn_progress := 0.0
 var advantage: Dictionary = {}
+var current_restart_id := -1
+
+func begin_restart(id: int) -> void:
+	current_restart_id=id
+	return_delay.clear()
+	last_distance.clear()
+	# Positional warnings belong to this incident; card history belongs to match.
+	warnings.clear()
+	gesture_target=null
+	gesture_remaining=0
 
 func build(match_node: Node3D) -> void:
 	game = match_node
@@ -81,7 +91,7 @@ func tick(delta: float) -> void:
 	var destination: Vector3 = observation_target()
 	if mark_state != "":
 		destination = _mark_tick(delta)
-	if game.goal_flow.active and game.goal_flow.state != "celebrating":
+	if game.goal_flow.active and game.goal_flow.state in ["kickoff_prepare","ready","kickoff_pending"]:
 		_enforce_returns(delta)
 		if mark_state == "" and gesture_target != null and gesture_remaining > 0:
 			destination = gesture_target.global_position + Vector3(0,0,2.5)
@@ -281,11 +291,13 @@ func _show_card(player: FootballPlayer, red: bool, reason: String) -> void:
 
 func _enforce_returns(delta: float) -> void:
 	for player in game.players:
-		if player.sent_off or (player == game.goal_flow.runner and game.goal_flow.state != "placing"):
+		if player.sent_off or player==game.goal_flow.runner:
 			continue
 		var reason: String = game.goal_flow.position_reason(player)
 		var target: Vector3 = game.goal_flow.targets[player.player_id]
-		var distance: float = player.global_position.distance_to(target)
+		# Forgive progress toward any legal position, not an AI formation slot.
+		var own: float=-1 if player.team==0 else 1
+		var distance: float=maxf(0,-player.global_position.x*own) if reason=="return to your half" else maxf(0,FootballRules.RESTART_DISTANCE-Vector2(player.global_position.x-game.goal_flow.restart_spot.x,player.global_position.z-game.goal_flow.restart_spot.z).length())
 		var previous := float(last_distance.get(player.player_id,distance))
 		last_distance[player.player_id] = distance
 		var waiting := float(return_delay.get(player.player_id,0))

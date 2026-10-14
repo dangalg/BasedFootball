@@ -3,6 +3,9 @@ extends RigidBody3D
 
 const RADIUS := 0.11
 
+func ground_drag() -> float:
+	return linear_damp+float(ProjectSettings.get_setting("physics/3d/default_linear_damp",.1))+.13/mass
+
 static func loft_launch(distance: float, apex: float) -> Vector2:
 	# Account for engine air damping at launch; flight is thereafter unconstrained.
 	var drag := 0.22 + float(ProjectSettings.get_setting("physics/3d/default_linear_damp", 0.1))
@@ -32,7 +35,11 @@ var last_touch_team: int = -1
 var last_touch_id: String = ""
 var touches: int = 0
 var control_block_remaining: float = 0.0
+var control_block_player_id := ""
 var control_candidate_id: String = ""
+
+func control_blocked_for(player_id: String) -> bool:
+	return control_block_remaining>0 and (control_block_player_id=="" or control_block_player_id==player_id)
 
 func predict(time: float) -> Vector3:
 	var airborne := global_position.y > RADIUS+.045 or linear_velocity.y > .5

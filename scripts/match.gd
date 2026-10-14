@@ -5,6 +5,7 @@ signal match_finished
 const DURATION := 180.0
 var players: Array[FootballPlayer] = []
 var ball: FootballBall
+var previous_ball_position:=Vector3.ZERO
 var camera: Camera3D
 var hud: FootballHUD
 var sound: FootballSound
@@ -36,6 +37,7 @@ var team_coordinator := FootballTeamCoordinator.new()
 
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
+	var foundation_acceptance := "--foundation-acceptance" in OS.get_cmdline_user_args()
 	var handling_acceptance := "--handling-acceptance" in OS.get_cmdline_user_args()
 	var decision_acceptance := "--decision-acceptance" in OS.get_cmdline_user_args()
 	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
@@ -53,7 +55,7 @@ func _ready() -> void:
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
-	acceptance = impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
+	acceptance = foundation_acceptance or impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
 	squad.load_squad(acceptance)
 	_build_pitch()
@@ -93,6 +95,11 @@ func _ready() -> void:
 		var session: Node = load("res://tests/natural_motion_acceptance.gd" if "--natural-motion-check" in OS.get_cmdline_user_args() else "res://tests/restart_dribble_acceptance.gd" if "--restart-dribble-check" in OS.get_cmdline_user_args() else "res://tests/carry_acceptance.gd" if "--carry-check" in OS.get_cmdline_user_args() else "res://tests/core_striking_acceptance.gd" if core_striking_acceptance else "res://tests/core_handling_acceptance.gd" if core_handling_acceptance else "res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
+	elif foundation_acceptance:
+		set_process_unhandled_input(false)
+		decision_driver=load("res://tests/football_foundation_acceptance.gd").new()
+		add_child(decision_driver)
+		decision_driver.begin(self)
 	elif decision_acceptance:
 		set_process_unhandled_input(false)
 		decision_driver = load("res://tests/decision_acceptance.gd").new()
@@ -225,6 +232,9 @@ func _build_pitch() -> void:
 
 func _build_goal(side: float, mat: Material) -> void:
 	var post := FootballArt.material(Color("d6dbc9"), 0.45)
+	# Continue the pitch surface into the net; a lower concrete floor creates
+	# a lip that a grounded ball cannot roll back over.
+	FootballArt.solid(self, Vector3(2.3, .25, 4.8), Vector3(side*19.1, -.13, 0), FootballArt.material(Color("326f4c")))
 	# Collision boxes are identical; round posts and open nets replace only meshes.
 	for z in [-2.3, 2.3]:
 		FootballArt.hide_solid_mesh(FootballArt.solid(self, Vector3(0.18, 2.4, 0.18), Vector3(side * 18.1, 1.2, z), post))
@@ -260,9 +270,12 @@ func _build_players() -> void:
 			player.strike_contact.connect(_on_strike_contact.bind(player))
 			player.dribble_contact.connect(_on_dribble_contact.bind(player))
 			player.physical_event.connect(_on_physical_event.bind(player))
+			player.action_event.connect(_on_action_event.bind(player))
 			players.append(player)
 
 func reset_positions(kickoff_team: int) -> void:
+	FootballAI.clear_plans()
+	team_coordinator.reset()
 	for i in range(players.size()):
 		var player := players[i]
 		var index := i % 3
@@ -283,12 +296,14 @@ func reset_positions(kickoff_team: int) -> void:
 	ball.linear_velocity = Vector3.ZERO
 	ball.angular_velocity = Vector3.ZERO
 	ball.control_block_remaining = 0
+	ball.control_block_player_id = ""
 	ball.control_candidate_id = ""
 	# The new kickoff belongs to its receiving side, not the previous scorer.
 	# Clear individual touch continuity so it cannot survive a dead-ball restart.
 	ball.last_touch_team = kickoff_team
 	ball.last_touch_id = ""
 	ball.reset_physics_interpolation()
+	previous_ball_position=ball.global_position
 	kickoff_remaining = 1.5
 	charging = false
 	charge = 0.0
@@ -305,6 +320,7 @@ func _select(index: int) -> void:
 		controlled.shot_preparation = 0
 	selected_index = clampi(index, 0, 2)
 	controlled = players[selected_index]
+	FootballAI.release_control(controlled)
 	for player in players:
 		player.selected = player == controlled
 	charging = false
@@ -395,6 +411,7 @@ func _physics_process(delta: float) -> void:
 			_record("shoulder", controlled, {"source": "controller"})
 	if goal_flow.active:
 		goal_flow.tick(delta)
+		previous_ball_position=ball.global_position
 		return
 	team_coordinator.update(players,ball,controlled,delta)
 	for player in players:
@@ -476,7 +493,7 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			else:
 				var strength := lerpf(22, 34, charge) if kind == "power" else lerpf(13, 23, charge) if kind in ["finesse", "outside"] else lerpf(14, 27, charge)
 				var lift := lerpf(0.35, 1.4, charge) if kind == "power" else lerpf(0.35, 1.8, charge)
-				if not controlled.kick(ball, shot_direction, strength, lift, kind) and controlled.incoming_pass_remaining > 0:
+				if not controlled.kick(ball, shot_direction, strength, lift, kind,0,_controller_kick_purpose()) and controlled.incoming_pass_remaining > 0:
 					controlled.buffer_kick(kind, shot_direction, strength, lift)
 			charging = false
 			charge = 0
@@ -489,7 +506,7 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 
 func _release_delivery(direction: Vector3, button: String, power: float, high: bool) -> void:
 	var receiver := _pass_receiver(controlled, direction)
-	var delivery := FootballPassing.delivery(controlled,receiver,direction,"through" if button=="through" else "pass",power)
+	var delivery := FootballPassing.delivery(controlled,receiver,direction,"through" if button=="through" else "pass",power,ball.global_position)
 	var strength: float = delivery.strength
 	var distance: float = delivery.distance
 	direction = delivery.direction
@@ -498,12 +515,15 @@ func _release_delivery(direction: Vector3, button: String, power: float, high: b
 	if button == "square" or (button == "through" and high):
 		var apex: float = clampf(2.4 + distance * 0.055, 2.8, 4.0) + (1.3 if high else 0)
 		var launch := FootballBall.loft_launch(distance, apex)
-		if not controlled.kick(ball, direction, launch.x, launch.y, "lob") and controlled.incoming_pass_remaining > 0:
+		if not controlled.kick(ball, direction, launch.x, launch.y, "lob",0,_controller_kick_purpose()) and controlled.incoming_pass_remaining > 0:
 			controlled.buffer_kick("lob", direction, launch.x, launch.y)
 	else:
 		var kind := "through" if button == "through" else "pass"
-		if not controlled.kick(ball, direction, strength, 0.08, kind) and controlled.incoming_pass_remaining > 0:
+		if not controlled.kick(ball, direction, strength, 0.08, kind,0,_controller_kick_purpose()) and controlled.incoming_pass_remaining > 0:
 			controlled.buffer_kick(kind, direction, strength, 0.08)
+
+func _controller_kick_purpose() -> String:
+	return "kickoff" if goal_flow.active and goal_flow.state=="ready" and goal_flow.signalled and controlled==goal_flow.runner else "live"
 
 func _close_opponent(player: FootballPlayer) -> FootballPlayer:
 	var closest := 1.05
@@ -539,14 +559,15 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 	if kind in ["pass", "through", "lob"]:
 		var receiver: FootballPlayer
 		for candidate in players:
-			if candidate.player_id == player.planned_receiver_id and not candidate.sent_off:
+			if candidate.player_id == player.accepted_receiver_id and not candidate.sent_off:
 				receiver = candidate
-		if receiver == null and player.planned_receiver_id == "":
+		if receiver == null and player.accepted_receiver_id == "":
 			receiver = _pass_receiver(player, player.action_direction)
 		if receiver != null:
 			receiver.incoming_pass_from = player.player_id
 			receiver.incoming_pass_remaining = 3.5
 			receiver.reaction_timer = 0
+			receiver.incoming_receive_point=player.accepted_receive_point
 	_record(kind, player, {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance})
 	sound.play_contact(kind, clampf(player.kick_strength / 30, 0.15, 1))
 	if player == controlled and not acceptance and not Input.get_connected_joypads().is_empty():
@@ -556,9 +577,21 @@ func _pass_receiver(passer: FootballPlayer, direction: Vector3) -> FootballPlaye
 	return FootballPassing.receiver(passer,direction,players)
 
 func _on_dribble_contact(player: FootballPlayer) -> void:
+	if player.incoming_pass_remaining>0:
+		player.last_pass_from=player.incoming_pass_from
+		player.receive_hold_remaining=.38
+		player.combination_remaining=4
 	player.incoming_pass_remaining = 0
+	goal_flow.notify_dribble(player)
 	_record("touch", player)
 	sound.play_contact("touch", 0.2)
+
+func _on_action_event(phase: String, detail: Dictionary, player: FootballPlayer) -> void:
+	var recorded:=detail.duplicate()
+	if recorded.has("point"):
+		recorded.point=_vec(recorded.point)
+	_record("action_"+phase,player,recorded)
+	goal_flow.notify_action(phase,player,detail)
 
 func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
 	_record(kind, player, detail)
@@ -571,6 +604,11 @@ func _control_ball() -> FootballPlayer:
 	var candidate: FootballPlayer = null
 	var best_distance := INF
 	for player in players:
+		if goal_flow.active and player!=goal_flow.runner and player.incoming_pass_remaining<=0:
+			# Idle players do not automatically trap a teammate's dead-ball return.
+			# Human movement and all body collisions remain available.
+			if player!=controlled or player.intent.length()<.05:
+				continue
 		if not player.can_control(ball):
 			continue
 		var offset := ball.global_position - player.global_position
@@ -599,16 +637,27 @@ func _control_ball() -> FootballPlayer:
 	return candidate
 
 func _check_goal() -> void:
+	var previous:=previous_ball_position
+	previous_ball_position=ball.global_position
 	if goal_flow.active:
 		return
-	# Entire sphere must cross the line, within the mouth and under the bar.
-	if absf(ball.global_position.x) > 18.1 + FootballBall.RADIUS and absf(ball.global_position.x) < 20.3 and absf(ball.global_position.z) < 2.21 - FootballBall.RADIUS and ball.global_position.y < 2.31 - FootballBall.RADIUS:
-		var scoring := 0 if ball.global_position.x > 0 else 1
+	# Evaluate the entire sphere crossing the goal plane. A later bounce into
+	# the net corner cannot erase a crossing that was inside the goal mouth.
+	for side in [-1.0,1.0]:
+		var plane: float=side*(18.1+FootballBall.RADIUS)
+		if previous.x*side>absf(plane) or ball.global_position.x*side<=absf(plane):
+			continue
+		var fraction: float=(plane-previous.x)/(ball.global_position.x-previous.x)
+		var crossing:=previous.lerp(ball.global_position,fraction)
+		if absf(crossing.z)>=2.21-FootballBall.RADIUS or crossing.y>=2.31-FootballBall.RADIUS or crossing.y<-.1:
+			continue
+		var scoring := 0 if side>0 else 1
 		scores[scoring] += 1
 		_record("goal", null, {"team": scoring, "ball": _vec(ball.global_position)})
 		sound.play_event("goal")
 		hud.flash("%s GOAL!" % ("HOME" if scoring == 0 else "AWAY"), 2.0)
 		goal_flow.begin(self, scoring)
+		return
 
 func _finish_match() -> void:
 	phase = "finished"
@@ -711,7 +760,9 @@ func _process(delta: float) -> void:
 		aim_line.position = controlled.global_position + direction.normalized() * 1.5 + Vector3.UP * .05
 		aim_line.rotation.y = atan2(direction.x, direction.z)
 		var instruction: String = goal_flow.position_reason(controlled)
-		hud.status.text = instruction.to_upper() if instruction != "" else "LEGAL POSITION / YOU MAY STAND ANYWHERE HERE"
+		var phase_labels: Dictionary={"celebrating":"RETURN AFTER CELEBRATING","retrieve":"RETRIEVE THE BALL","relay_prepare":"PREPARE THE RETURN PASS","relay_pending":"RETURN PASS","relay_flight":"RECEIVE THE RETURN PASS","settle":"SETTLE AT THE SPOT","kickoff_prepare":"PREPARE KICKOFF","ready":"KICK TO RESTART","kickoff_pending":"KICKOFF"}
+		var restart_status: String=phase_labels.get(goal_flow.state,"PREPARE THE RESTART")
+		hud.status.text = "RESTART / "+restart_status+" / "+(instruction.to_upper() if instruction!="" else "YOUR POSITION IS LEGAL")
 	else:
 		hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
 		if delivery_kind != "":
