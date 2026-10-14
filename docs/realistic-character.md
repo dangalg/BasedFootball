@@ -12,6 +12,13 @@ shoes and embedded cloth textures. Its thirteen deformation bones follow the
 same pose anchors used by physical touches, kicks and ragdolls. Fingers retain
 their modelled shape and are not individually animated in this prototype.
 
+The natural-character pass retains that CC0 mesh and its embedded cloth textures.
+Matte fabric and hair, softer skin highlights, stable eye/boot variants and original
+cuff/crest/lace details reduce the uniform plastic appearance. Details follow the
+existing torso, arm and boot anchors and add no colliders. Grounded steps, support
+weight transfer and step-driven arm rhythms provide the movement; this pass does
+not replace the physical action rig or alter player pace.
+
 `tools/build_realistic_athlete.py` records the local source paths and writes
 only to the explicitly supplied output directory. Reproduction requires Blender
 5.2, the MPFB extension, the local MakeHuman asset bundle and the existing

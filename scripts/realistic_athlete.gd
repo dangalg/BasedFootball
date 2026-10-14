@@ -15,6 +15,7 @@ func build(player: Node3D, visual: FootballPlayerVisual) -> void:
 	root.add_child(model)
 	_collect(model)
 	_style(player)
+	_kit_details(player,visual)
 	var number := FootballArt.text(visual.upper_body, str(player.shirt_number), Vector3(0, 0.38, 0.145), 44, Color("f2eee4"))
 	number.pixel_size = 0.0034
 	number.outline_size = 0
@@ -42,13 +43,54 @@ func _style(player: Node3D) -> void:
 				continue
 			var material := original.duplicate() as StandardMaterial3D
 			match original.resource_name:
-				"TShirt": material.albedo_color = Color("3689cf") if player.team == 0 else Color("db7059")
-				"FootballShorts": material.albedo_color = Color("203b55") if player.team == 0 else Color("51343d")
-				"Skin": material.albedo_color = [Color("c89470"), Color("8f6248"), Color("d6ab88")][variant]
-				"Hair", "Eyebrows": material.albedo_color = [Color("302925"), Color("493426"), Color("211e1c")][variant]
+				"TShirt":
+					material.albedo_color = Color("307fb8") if player.team == 0 else Color("c76b53")
+					material.roughness=.86
+					material.metallic_specular=.22
+				"FootballShorts":
+					material.albedo_color = Color("263b4e") if player.team == 0 else Color("49353b")
+					material.roughness=.9
+					material.metallic_specular=.18
+				"FootballSocks":
+					material.albedo_color=Color("dfddd1")
+					material.roughness=.94
+					material.metallic_specular=.12
+				"Skin":
+					material.albedo_color = [Color("bd8b6c"), Color("95694e"), Color("d3a98b")][variant]
+					material.roughness=.68
+					material.metallic_specular=.3
+				"Hair", "Eyebrows":
+					material.albedo_color = [Color("302925"), Color("493426"), Color("211e1c")][variant]
+					material.roughness=.82
+					material.metallic_specular=.2
+				"Iris":
+					material.albedo_color=[Color("6c5941"),Color("3d6058"),Color("48596a")][variant]
+					material.roughness=.26
+				"EyeSclera":
+					material.albedo_color=Color("d8d7ce")
+					material.roughness=.22
+				"Shoes":
+					material.albedo_color=[Color("292b2b"),Color("352d29"),Color("26272a")][variant]
+					material.roughness=.38
+					material.metallic_specular=.42
 			if player.team < 0 and original.resource_name in ["TShirt","FootballShorts","FootballSocks"]:
 				material.albedo_color = Color("242830")
 			mesh.set_surface_override_material(surface, material)
+
+func _kit_details(player: Node3D, visual: FootballPlayerVisual) -> void:
+	if player.team<0:
+		return
+	# Original, unbranded cloth trim follows the same torso/arm anchors as skin.
+	var trim:=FootballArt.material(Color("e0dccb"),.9)
+	var ink:=FootballArt.material(Color("24333b"),.86)
+	for arm in [visual.left_arm,visual.right_arm]:
+		FootballArt.cylinder(arm,.068,.012,Vector3(0,-.175,0),trim)
+	var badge:=FootballArt.sphere(visual.upper_body,.026,Vector3(-.105,.425,-.146),trim)
+	badge.scale=Vector3(.85,1,.10)
+	FootballArt.box(visual.upper_body,Vector3(.008,.025,.003),Vector3(-.105,.425,-.151),ink)
+	for boot in [visual.left_boot,visual.right_boot]:
+		for lace in range(3):
+			FootballArt.box(boot,Vector3(.057,.005,.009),Vector3(0,.037,-.038-lace*.018),trim)
 
 func _hide_primitives(node: Node) -> void:
 	for child in node.get_children():

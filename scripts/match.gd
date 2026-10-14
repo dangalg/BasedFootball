@@ -38,6 +38,7 @@ var team_coordinator := FootballTeamCoordinator.new()
 func _ready() -> void:
 	var visual_acceptance := "--visual-acceptance" in OS.get_cmdline_user_args()
 	var foundation_acceptance := "--foundation-acceptance" in OS.get_cmdline_user_args()
+	var natural_character_acceptance := "--natural-character-acceptance" in OS.get_cmdline_user_args()
 	var handling_acceptance := "--handling-acceptance" in OS.get_cmdline_user_args()
 	var decision_acceptance := "--decision-acceptance" in OS.get_cmdline_user_args()
 	var impact_acceptance := "--impact-acceptance" in OS.get_cmdline_user_args()
@@ -55,7 +56,7 @@ func _ready() -> void:
 	skinned_shot_acceptance = skinned_shot_acceptance or shots_team_acceptance
 	athlete_acceptance = athlete_acceptance or skinned_shot_acceptance
 	visual_acceptance = visual_acceptance or athlete_acceptance
-	acceptance = foundation_acceptance or impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
+	acceptance = natural_character_acceptance or foundation_acceptance or impact_acceptance or decision_acceptance or handling_acceptance or visual_acceptance or "--acceptance" in OS.get_cmdline_user_args() or "--dribble-acceptance" in OS.get_cmdline_user_args()
 	_install_input()
 	squad.load_squad(acceptance)
 	_build_pitch()
@@ -95,9 +96,9 @@ func _ready() -> void:
 		var session: Node = load("res://tests/natural_motion_acceptance.gd" if "--natural-motion-check" in OS.get_cmdline_user_args() else "res://tests/restart_dribble_acceptance.gd" if "--restart-dribble-check" in OS.get_cmdline_user_args() else "res://tests/carry_acceptance.gd" if "--carry-check" in OS.get_cmdline_user_args() else "res://tests/core_striking_acceptance.gd" if core_striking_acceptance else "res://tests/core_handling_acceptance.gd" if core_handling_acceptance else "res://tests/contact_play_acceptance.gd" if contact_play_acceptance else "res://tests/teamplay_acceptance.gd" if teamplay_acceptance else "res://tests/human_motion_acceptance.gd" if human_motion_acceptance else "res://tests/shots_team_acceptance.gd" if shots_team_acceptance else "res://tests/skinned_shot_acceptance.gd" if skinned_shot_acceptance else "res://tests/athlete_acceptance.gd" if athlete_acceptance else "res://tests/impact_acceptance.gd" if impact_acceptance else "res://tests/handling_acceptance.gd" if handling_acceptance else "res://tests/visual_acceptance.gd").new()
 		add_child(session)
 		session.begin(self)
-	elif foundation_acceptance:
+	elif foundation_acceptance or natural_character_acceptance:
 		set_process_unhandled_input(false)
-		decision_driver=load("res://tests/football_foundation_acceptance.gd").new()
+		decision_driver=load("res://tests/natural_character_acceptance.gd" if natural_character_acceptance else "res://tests/football_foundation_acceptance.gd").new()
 		add_child(decision_driver)
 		decision_driver.begin(self)
 	elif decision_acceptance:

@@ -506,6 +506,29 @@
         "path": "staging/capture.json",
         "format": "game-dev-capture-v1"
       }
+    },
+    {
+      "id": "natural-character",
+      "title": "Natural squad movement and character detail",
+      "description": "One bounded six-athlete production-loop standing, walk/jog/sprint, turn/stop and touch-ahead dribble sequence with continuous profile/front/angled motion frames and ground-anchor/contact telemetry.",
+      "command": {
+        "runtime": "node",
+        "executable": "tools/natural_character_capture.mjs",
+        "workingDirectory": ".",
+        "arguments": []
+      },
+      "timeoutSeconds": 170,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
     }
   ]
 }
