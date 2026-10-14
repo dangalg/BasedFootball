@@ -369,10 +369,17 @@ func animate(player: Node3D, delta: float) -> void:
 		elif player.emotion == "sad":
 			upper_body.rotation.x = .18
 		elif player.emotion == "carry":
-			left_arm.rotation = Vector3(.8, 0, -.12)
-			right_arm.rotation = Vector3(.8, 0, .12)
-			left_elbow.rotation.x = .7
-			right_elbow.rotation.x = .7
+			# Local -Z is forward. Bring both palms inward around the ball.
+			left_arm.rotation = Vector3(.55, 0, .28)
+			right_arm.rotation = Vector3(.55, 0, -.28)
+			left_elbow.rotation.x = 1.05
+			right_elbow.rotation.x = 1.05
+		elif player.emotion == "place":
+			upper_body.rotation.x=-.7
+			left_arm.rotation=Vector3(.65,0,.2)
+			right_arm.rotation=Vector3(.65,0,-.2)
+			left_elbow.rotation.x=.2
+			right_elbow.rotation.x=.2
 		elif player.emotion == "ref_card":
 			right_arm.rotation = Vector3(-.1,0,2.85)
 			right_elbow.rotation.x = .15
@@ -384,6 +391,9 @@ func animate(player: Node3D, delta: float) -> void:
 			head_pivot.rotation.x = .35
 		skinned.sync()
 	previous_hip_height = player.global_position.y + player.body_visual.position.y + 0.88
+
+func carry_anchor() -> Vector3:
+	return (left_elbow.to_global(Vector3(0,-.26,0))+right_elbow.to_global(Vector3(0,-.26,0)))*.5
 
 func begin_hop(player: Node3D) -> void:
 	previous_hip_height = player.global_position.y + player.body_visual.position.y + 0.88

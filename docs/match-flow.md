@@ -37,3 +37,6 @@ These are the implemented courtyard rules, not the complete eleven-a-side law
 package. Offside, goalkeeper handling and a full penalty/throw-in system are
 outside this stage. Initial setup and explicit rematches establish starting
 positions; later goal and foul restarts preserve continuous player movement.
+
+Restart carries use the actual hand midpoint with relative-velocity damping and gravity support. The player cradles the ball in front, turns under normal locomotion and lowers it onto the spot through a placing pose.
+The carry target velocity is measured from successive hand-anchor positions, including torso turns and lowering, with a bounded velocity and force.

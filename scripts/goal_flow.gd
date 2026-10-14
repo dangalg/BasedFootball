@@ -18,6 +18,8 @@ var restart_spot := Vector3.ZERO
 var restart_kind := "kickoff"
 var signalled := false
 var ready_elapsed := 0.0
+var previous_hand := Vector3.ZERO
+var hand_sample_valid := false
 
 func begin_initial(match_node: Node3D, team: int) -> void:
 	begin(match_node,1-team)
@@ -37,6 +39,7 @@ func begin(match_node: Node3D, scoring: int) -> void:
 	restart_spot = Vector3.ZERO
 	restart_kind = "kickoff"
 	carrying = false
+	hand_sample_valid=false
 	signalled = false
 	ready_elapsed = 0
 	scorer = null
@@ -200,14 +203,23 @@ func tick(delta: float) -> void:
 		return
 	if not carrying and runner.global_position.distance_to(game.ball.global_position) < 1.1:
 		carrying = true
+		hand_sample_valid=false
 		game._record("ball_retrieved", runner)
 	if carrying:
-		var hand := runner.global_position + Vector3.UP * 1.04 + runner.aim * .42
+		var hand := runner.visual_controller.carry_anchor()
 		if state == "placing":
-			hand = restart_spot + Vector3.UP * FootballBall.RADIUS
-		runner.emotion = "carry" if state == "returning" else ""
-		var force: Vector3 = (hand - game.ball.global_position) * 32 - game.ball.linear_velocity * 5
-		game.ball.apply_central_force(force.limit_length(35))
+			hand = hand.lerp(restart_spot+Vector3.UP*FootballBall.RADIUS,smoothstep(0,.65,elapsed))
+		# The hand midpoint also moves when the torso turns and the arms settle.
+		# Root velocity alone misses that motion and lets the ball lag sideways.
+		var hand_velocity: Vector3 = (hand-previous_hand)/maxf(delta,.001) if hand_sample_valid else runner.linear_velocity
+		hand_velocity=hand_velocity.limit_length(14)
+		previous_hand=hand
+		hand_sample_valid=true
+		runner.emotion = "carry" if state == "returning" else "place"
+		# Damping relative to the carrier avoids a speed-dependent trailing ball.
+		# Gravity support prevents the carried ball sagging below the palms.
+		var force: Vector3 = (hand - game.ball.global_position) * 65 - (game.ball.linear_velocity-hand_velocity) * 7 + Vector3.UP*game.ball.mass*9.8
+		game.ball.apply_central_force(force.limit_length(55))
 		# No collision exception with opponents: the ball remains interceptable.
 		if state == "returning" and runner.global_position.distance_to(targets[runner.player_id]) < .65:
 			state = "placing"
@@ -215,6 +227,7 @@ func tick(delta: float) -> void:
 	if _players_ready() and state == "placing" and game.referee.mark_state == "" and game.ball.global_position.distance_to(restart_spot + Vector3.UP * FootballBall.RADIUS) < .3 and game.ball.linear_velocity.length() < .2:
 		state = "ready"
 		carrying = false
+		runner.emotion=""
 		signalled = true
 		game.sound.play_event("whistle")
 		game.hud.flash("KICK TO RESTART",2)
