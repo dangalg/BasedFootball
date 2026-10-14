@@ -38,5 +38,5 @@ package. Offside, goalkeeper handling and a full penalty/throw-in system are
 outside this stage. Initial setup and explicit rematches establish starting
 positions; later goal and foul restarts preserve continuous player movement.
 
-Restart carries use the actual hand midpoint with relative-velocity damping and gravity support. The player cradles the ball in front, turns under normal locomotion and lowers it onto the spot through a placing pose.
-The carry target velocity is measured from successive hand-anchor positions, including torso turns and lowering, with a bounded velocity and force.
+Restart retrieval uses normal swept-foot dribble contacts, with no hand carry, force tether or ball teleport. The retriever approaches behind the ball, slows near the spot, cushions it, then steps behind the outgoing pass direction. AI kickoffs select an available teammate in their own half and use the shared physical pass delivery. Actual kicker identity survives the restart to keep reception assignments valid.
+Kickoff lane selection excludes blockers from either team and admits nearby legal backward outlets. Launch verification reads the integrated physics velocity rather than the pre-impulse strike callback.

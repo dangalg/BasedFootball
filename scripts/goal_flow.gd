@@ -2,7 +2,7 @@ class_name FootballGoalFlow
 extends RefCounted
 
 # A goal is a dead ball, not a teleport. Players return under normal locomotion;
-# one receiving teammate retrieves the ball and carries it back visibly.
+# one receiving teammate retrieves the ball through physical foot touches.
 var game: Node3D
 var active := false
 var state := ""
@@ -18,8 +18,8 @@ var restart_spot := Vector3.ZERO
 var restart_kind := "kickoff"
 var signalled := false
 var ready_elapsed := 0.0
-var previous_hand := Vector3.ZERO
-var hand_sample_valid := false
+var retrieved := false
+var kickoff_receiver: FootballPlayer
 
 func begin_initial(match_node: Node3D, team: int) -> void:
 	begin(match_node,1-team)
@@ -39,7 +39,8 @@ func begin(match_node: Node3D, scoring: int) -> void:
 	restart_spot = Vector3.ZERO
 	restart_kind = "kickoff"
 	carrying = false
-	hand_sample_valid=false
+	retrieved=false
+	kickoff_receiver=null
 	signalled = false
 	ready_elapsed = 0
 	scorer = null
@@ -89,6 +90,8 @@ func begin_free_kick(match_node: Node3D, team: int, spot: Vector3) -> void:
 	restart_kind = "free kick"
 	restart_spot = Vector3(clampf(spot.x,-16.5,16.5),0,clampf(spot.z,-10.5,10.5))
 	carrying = false
+	retrieved=false
+	kickoff_receiver=null
 	signalled = false
 	ready_elapsed = 0
 	runner = null
@@ -179,9 +182,10 @@ func tick(delta: float) -> void:
 		var destination: Vector3 = targets[player.player_id]
 		if state == "celebrating":
 			destination = celebration_target + Vector3((game.players.find(player) % 3 - 1) * 1.5, 0, 1.7) if player.team == scorer.team else player.global_position
-		elif player == runner and not carrying:
-			destination = game.ball.global_position
-		_walk(player, destination)
+		if player==runner and state in ["returning","placing"]:
+			_return_ball()
+		else:
+			_walk(player, destination)
 	if state == "ready":
 		if not _players_ready():
 			signalled = false
@@ -192,45 +196,95 @@ func tick(delta: float) -> void:
 			game.sound.play_event("whistle")
 		ready_elapsed += delta
 		if runner != game.controlled and ready_elapsed > .6 and runner.upright_ready():
-			var direction := Vector3(1 if receiving_team == 0 else -1,0,1).normalized()
-			for teammate in game.players:
-				if teammate.team == receiving_team and teammate != runner and not teammate.sent_off:
-					direction = (teammate.global_position-game.ball.global_position).normalized()
-					break
-			runner.kick(game.ball,direction,9,.08,"pass")
+			kickoff_receiver=_restart_receiver()
+			if kickoff_receiver!=null:
+				var direction: Vector3 = (kickoff_receiver.global_position-game.ball.global_position)*Vector3(1,0,1)
+				var delivery:=FootballPassing.delivery(runner,kickoff_receiver,direction.normalized(),"pass",.4)
+				runner.planned_receiver_id=kickoff_receiver.player_id
+				runner.planned_receive_point=delivery.point
+				runner.aim=delivery.direction
+				runner.kick(game.ball,delivery.direction,delivery.strength,.08,"pass")
 		return
 	if state not in ["returning", "placing"]:
 		return
-	if not carrying and runner.global_position.distance_to(game.ball.global_position) < 1.1:
-		carrying = true
-		hand_sample_valid=false
+	if not retrieved and runner.reach_ball(game.ball):
+		retrieved=true
 		game._record("ball_retrieved", runner)
-	if carrying:
-		var hand := runner.visual_controller.carry_anchor()
-		if state == "placing":
-			hand = hand.lerp(restart_spot+Vector3.UP*FootballBall.RADIUS,smoothstep(0,.65,elapsed))
-		# The hand midpoint also moves when the torso turns and the arms settle.
-		# Root velocity alone misses that motion and lets the ball lag sideways.
-		var hand_velocity: Vector3 = (hand-previous_hand)/maxf(delta,.001) if hand_sample_valid else runner.linear_velocity
-		hand_velocity=hand_velocity.limit_length(14)
-		previous_hand=hand
-		hand_sample_valid=true
-		runner.emotion = "carry" if state == "returning" else "place"
-		# Damping relative to the carrier avoids a speed-dependent trailing ball.
-		# Gravity support prevents the carried ball sagging below the palms.
-		var force: Vector3 = (hand - game.ball.global_position) * 65 - (game.ball.linear_velocity-hand_velocity) * 7 + Vector3.UP*game.ball.mass*9.8
-		game.ball.apply_central_force(force.limit_length(55))
-		# No collision exception with opponents: the ball remains interceptable.
-		if state == "returning" and runner.global_position.distance_to(targets[runner.player_id]) < .65:
-			state = "placing"
-			elapsed = 0
-	if _players_ready() and state == "placing" and game.referee.mark_state == "" and game.ball.global_position.distance_to(restart_spot + Vector3.UP * FootballBall.RADIUS) < .3 and game.ball.linear_velocity.length() < .2:
+	game._control_ball()
+	if state=="returning" and game.ball.global_position.distance_to(restart_spot+Vector3.UP*FootballBall.RADIUS)<.65:
+		state="placing"
+		elapsed=0
+	var clear_stance: bool = kickoff_receiver!=null and (game.ball.global_position-runner.global_position).dot((kickoff_receiver.global_position-game.ball.global_position).normalized())>.32 and runner.reach_ball(game.ball)
+	if _players_ready() and state == "placing" and clear_stance and game.referee.mark_state == "" and game.ball.global_position.distance_to(restart_spot + Vector3.UP * FootballBall.RADIUS) < .4 and game.ball.linear_velocity.length() < .25:
 		state = "ready"
 		carrying = false
 		runner.emotion=""
 		signalled = true
 		game.sound.play_event("whistle")
 		game.hud.flash("KICK TO RESTART",2)
+
+func _restart_receiver() -> FootballPlayer:
+	var best:=-INF
+	var chosen: FootballPlayer
+	var own_direction:=1.0 if receiving_team==1 else -1.0
+	for teammate in game.players:
+		if teammate==runner or teammate.team!=receiving_team or teammate.sent_off or not teammate.upright_ready():
+			continue
+		if restart_kind=="kickoff" and teammate.global_position.x*own_direction<.3:
+			continue
+		var clearance:=_restart_lane_clearance(teammate)
+		if clearance<.8:
+			continue
+		var score: float = minf(clearance,3)*2-teammate.global_position.distance_to(restart_spot)*.2
+		if score>best:
+			best=score
+			chosen=teammate
+	return chosen
+
+func _restart_lane_clearance(target: FootballPlayer) -> float:
+	var start: Vector3 = game.ball.global_position*Vector3(1,0,1)
+	var end:=target.global_position*Vector3(1,0,1)
+	var segment:=end-start
+	var clearance:=20.0
+	for player in game.players:
+		if player==runner or player==target or player.sent_off:
+			continue
+		var point: Vector3 = player.global_position*Vector3(1,0,1)
+		var along:=clampf((point-start).dot(segment)/maxf(segment.length_squared(),.001),0,1)
+		if along>.03 and along<.97:
+			clearance=minf(clearance,point.distance_to(start+segment*along))
+	return clearance
+
+func _return_ball() -> void:
+	runner.emotion=""
+	runner.sprint=false
+	var offset: Vector3 = (restart_spot-game.ball.global_position)*Vector3(1,0,1)
+	var distance:=offset.length()
+	var route:=offset.normalized()
+	var gap: Vector3 = (game.ball.global_position-runner.global_position)*Vector3(1,0,1)
+	if state=="placing":
+		# Cushion at the spot before repositioning beside it for a clear exit.
+		if game.ball.linear_velocity.length()>.25 or distance>.4:
+			runner.intent=route*minf(distance*.6,.35) if distance>.4 else Vector3.ZERO
+			runner.aim=gap.normalized()
+		else:
+			kickoff_receiver=_restart_receiver()
+			var outgoing: Vector3 = (kickoff_receiver.global_position-restart_spot).normalized() if kickoff_receiver!=null else Vector3(-1 if receiving_team==0 else 1,0,0)
+			targets[runner.player_id]=game.ball.global_position-outgoing*.55
+			var approach: Vector3 = (targets[runner.player_id]-runner.global_position)*Vector3(1,0,1)
+			runner.intent=approach.normalized()*minf(approach.length()*1.6,.5) if approach.length()>.08 else Vector3.ZERO
+			runner.aim=outgoing
+		return
+	if gap.length()>.85 or gap.dot(route)<.12:
+		# Approach from behind the ball; go around it rather than kicking it
+		# through the capsule when returning in the opposite direction.
+		var behind: Vector3 = game.ball.global_position-route*.6
+		if gap.dot(route)<.12 and gap.length()<1.5:
+			behind+=route.cross(Vector3.UP)*.65
+		_walk(runner,behind)
+	else:
+		runner.intent=route*clampf(distance*.22,.15,.65)
+		runner.aim=route
 
 func _walk(player: FootballPlayer, destination: Vector3) -> void:
 	var offset := destination - player.global_position
@@ -268,7 +322,7 @@ func _finish() -> void:
 	for player in game.players:
 		player.emotion = ""
 	game.ball.last_touch_team = receiving_team
-	game.ball.last_touch_id = ""
+	# Preserve the real kicker so the receiver assignment survives kickoff.
 	game.ball.control_block_remaining = 0
 	game.sound.play_event("whistle")
 	game.hud.flash("PLAY", 1)

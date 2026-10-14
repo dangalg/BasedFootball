@@ -5,6 +5,29 @@
   "version": "1.0.0",
   "scenarios": [
     {
+      "id": "restart-dribble",
+      "title": "Foot-controlled return and backward kickoff",
+      "description": "One two-team foot return, stop and backward kickoff reception sequence.",
+      "command": {
+        "workingDirectory": ".",
+        "runtime": "node",
+        "executable": "tools/restart_dribble_capture.mjs",
+        "arguments": []
+      },
+      "timeoutSeconds": 85,
+      "capabilities": [
+        "cpu",
+        "project-write",
+        "gpu",
+        "opengl"
+      ],
+      "parameters": {},
+      "outputs": {
+        "path": "staging/capture.json",
+        "format": "game-dev-capture-v1"
+      }
+    },
+    {
       "id": "front-carry",
       "title": "Physical front carry and placement",
       "description": "One pickup, carry, turn and placement sequence; no kickoff.",
