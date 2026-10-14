@@ -33,6 +33,9 @@ var frame_delta := 1.0 / 120.0
 var strike_toe := false
 var strike_toe_angle := 0.0
 var previous_hip_height := 0.0
+var movement_blend:=0.0
+var lean_blend:=0.0
+var turn_lean:=0.0
 
 func build(player: Node3D) -> void:
 	# Separate cosmetic randomness never consumes the AI decision generator.
@@ -164,6 +167,7 @@ func animate(player: Node3D, delta: float) -> void:
 	var previous_left_arm: Quaternion = left_arm.quaternion
 	var previous_right_arm: Quaternion = right_arm.quaternion
 	var velocity := Vector3(player.linear_velocity.x, 0, player.linear_velocity.z)
+	movement_blend=move_toward(movement_blend,clampf(velocity.length()/5.5,0,1),delta*2.5)
 	var facing: Vector3 = player.action_direction if player.action_kind != "" else player.aim
 	# Intent can reverse before momentum does. Face the actual running direction
 	# rather than playing a forward run while travelling away from the face.
@@ -172,7 +176,10 @@ func animate(player: Node3D, delta: float) -> void:
 	if player.action_kind == "kick":
 		facing = Vector3(player.kick_target_offset.x, 0, player.kick_target_offset.z).normalized()
 	if facing.length_squared() > 0.1:
-		player.body_visual.rotation.y = lerp_angle(player.body_visual.rotation.y, atan2(-facing.x, -facing.z), 12.0 * delta)
+		var desired_yaw:=atan2(-facing.x,-facing.z)
+		var yaw_error:=wrapf(desired_yaw-player.body_visual.rotation.y,-PI,PI)
+		turn_lean=lerpf(turn_lean,clampf(yaw_error*velocity.length()*.04,-.18,.18),minf(1,delta*6))
+		player.body_visual.rotation.y = lerp_angle(player.body_visual.rotation.y, desired_yaw, minf(1,(8+movement_blend*4)*delta))
 	var local_velocity: Vector3 = player.body_visual.basis.inverse() * velocity
 	var sliding: bool = player.action_kind == "slide"
 	var standing: bool = player.action_kind == "standing"
@@ -185,9 +192,11 @@ func animate(player: Node3D, delta: float) -> void:
 			touch_weight = smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		else:
 			touch_weight = 1 - smoothstep(player.dribble_contact_time + 0.025, player.dribble_duration - 0.01, player.dribble_elapsed)
-	var rising: bool = not sliding and player.body_visual.position.y < -0.25 and player.recovery_remaining > 0
+	var rising: bool = not sliding and player.slide_recovery and player.recovery_remaining>0
 	player.body_visual.rotation.x = 0
 	player.body_visual.rotation.z = 0
+	player.body_visual.position.x=0
+	player.body_visual.position.z=0
 	var lower := smoothstep(0, 0.10, player.action_elapsed) if sliding else 0.0
 	var hip_offset := -0.61 * lower if sliding else -0.06 - absf(sin(player.step_phase)) * 0.018 * gait_blend
 	if kicking:
@@ -223,14 +232,18 @@ func animate(player: Node3D, delta: float) -> void:
 		var requested_height: float = player.global_position.y + next_hip_offset + 0.88
 		next_hip_offset = maxf(requested_height, lowest_hip) - player.global_position.y - 0.88
 	player.body_visual.position.y = next_hip_offset
+	if not sliding and not rising and not kicking:
+		player.body_visual.position.x=sin(player.step_phase)*.018*gait_blend
 	var acceleration := (velocity - previous_velocity) / maxf(delta, 0.001)
 	previous_velocity = velocity
 	var local_acceleration: Vector3 = player.body_visual.basis.inverse() * acceleration
-	upper_body.rotation.x = lerpf(upper_body.rotation.x, 0.85 if sliding or rising else local_velocity.z * 0.022 + clampf(local_acceleration.z * 0.008, -0.12, 0.12) - (0.18 if standing or kicking else 0.0), minf(1, 18 * delta))
-	upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025, minf(1, 12 * delta))
+	lean_blend=lerpf(lean_blend,local_velocity.z*.022+clampf(local_acceleration.z*.006,-.12,.12),minf(1,delta*7))
+	upper_body.rotation.x = lerpf(upper_body.rotation.x, -.2 if sliding or rising else lean_blend - (0.18 if standing or kicking else 0.0), minf(1, 12 * delta))
+	upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025+turn_lean, minf(1, 8 * delta))
 	# Jockeying can intentionally backpedal while looking at the ball.
 	var gait_direction := -1.0 if local_velocity.z > 0.1 else 1.0
-	player.step_phase += velocity.length() * delta * 2.7 * gait_direction * cadence_style * (1 + variation * 0.025)
+	var cadence:=lerpf(3.7,2.65,movement_blend)
+	player.step_phase += velocity.length() * delta * cadence * gait_direction * cadence_style * (1 + variation * 0.035)
 	var stride := minf(velocity.length() * 0.085, 0.6)
 	var left_swing := sin(player.step_phase) * stride
 	var right_swing := -left_swing
@@ -238,12 +251,12 @@ func animate(player: Node3D, delta: float) -> void:
 	# endpoint smoothing can advance instead of restarting each physics tick.
 	left_boot.rotation = Vector3.ZERO
 	right_boot.rotation = Vector3.ZERO
-	left_arm.rotation = Vector3(-left_swing * 0.7 * arm_style, 0, -0.15)
-	right_arm.rotation = Vector3(-right_swing * 0.7 * arm_style, 0, 0.15)
+	left_arm.rotation = Vector3(-left_swing * 0.7 * arm_style +variation*.02, 0, -0.12-movement_blend*.06)
+	right_arm.rotation = Vector3(-right_swing * 0.7 * arm_style-variation*.018, 0, 0.12+movement_blend*.06)
 	# The athlete faces local -Z. Positive X flexion bends the forearms forward;
 	# a negative angle bent both elbows towards the back of the torso.
-	left_elbow.rotation.x = 0.6 + stride * 0.3
-	right_elbow.rotation.x = 0.6 + stride * 0.3
+	left_elbow.rotation.x = lerpf(.25,.95,movement_blend)+stride*.12
+	right_elbow.rotation.x = lerpf(.28,.92,movement_blend)+stride*.12
 	# Stance travels opposite local motion at ground height; swing lifts the toe.
 	# Both legs use the same IK and boot transforms as physical contact checks.
 	gait_blend = move_toward(gait_blend, clampf(velocity.length() / 0.8, 0, 1), delta * 7)
@@ -323,11 +336,7 @@ func animate(player: Node3D, delta: float) -> void:
 		upper_body.rotation.y = 0.25 * player.shot_preparation
 		upper_body.rotation.x -= 0.12 * player.shot_preparation
 	if rising and not player.getting_up:
-		var recovery := 1 - clampf(player.recovery_remaining / 0.65, 0, 1)
-		upper_body.rotation.x = lerpf(0.95, 0, smoothstep(0.15, 1, recovery))
-		upper_body.rotation.z = lerpf(0.35 + slide_style, 0, recovery)
-		left_arm.rotation.x = lerpf(-0.85, 0, recovery)
-		right_arm.rotation.x = lerpf(-0.35, 0, recovery)
+		_slide_recovery_pose(player)
 	if not sliding and not kicking and not rising and not player.hop_active and not player.getting_up:
 		var breathing := sin(motion_time * 2.0 + style_phase)
 		upper_body.rotation.x += posture_style + breathing * 0.008
@@ -407,17 +416,67 @@ func _slide_pose(player: Node3D) -> void:
 	var entry := smoothstep(0, 0.12, player.action_elapsed)
 	var direction: Vector3 = player.action_direction
 	var lateral := direction.cross(Vector3.UP)
+	var side:=1.0 if player.slide_right else -1.0
+	var roll: float = side*(.98+slide_style)*entry
+	_side_hip(player,roll,lerpf(.82,.24,entry))
 	var extension := lerpf(0.62, 0.74, clampf(player.slide_entry_speed / 8.5, 0, 1))
 	var extended: Vector3 = player.global_position + direction * extension + Vector3.UP * 0.085
-	var tucked: Vector3 = player.global_position + direction * 0.10 - lateral * 0.20 + Vector3.UP * 0.13
-	_pose_foot(player, true, slide_start_right.lerp(extended, entry))
-	_pose_foot(player, false, slide_start_left.lerp(tucked, entry))
-	upper_body.rotation.x = lerpf(upper_body.rotation.x, 1.18, entry)
-	upper_body.rotation.z = (0.38 + slide_style) * entry
-	left_arm.rotation = Vector3(-0.85 * entry, 0, -0.65)
-	right_arm.rotation = Vector3(-0.25 * entry, 0, 0.45)
+	if is_instance_valid(player.action_ball) and not player.action_has_hit:
+		var offset: Vector3 = player.action_ball.global_position-player.global_position
+		var along:=offset.dot(direction)
+		var across:=offset.dot(lateral)
+		# Align either boot with a reachable ball during entry, then commit to
+		# the original follow-through once contact occurs or the ball is missed.
+		if along>.08 and along<.9 and absf(across)<.24 and player.action_elapsed<.3:
+			extended=player.global_position+direction*along+lateral*across+Vector3.UP*.10
+	var tucked: Vector3 = player.global_position - direction * 0.17 - lateral * side*.15 + Vector3.UP * 0.10
+	_pose_foot(player, player.slide_right, (slide_start_right if player.slide_right else slide_start_left).lerp(extended, entry))
+	_pose_foot(player, not player.slide_right, (slide_start_left if player.slide_right else slide_start_right).lerp(tucked, entry))
+	upper_body.rotation.x = -.18*entry
+	upper_body.rotation.z = side*.08*entry
+	left_arm.rotation = Vector3(.3*entry, 0, -.3)
+	right_arm.rotation = Vector3(.3*entry, 0, .3)
 	left_elbow.rotation.x = 0.85
 	right_elbow.rotation.x = 0.45
+	_pose_hand(not player.slide_right,player.global_position-direction*.05-lateral*side*.32+Vector3.UP*.08,entry)
+
+func _side_hip(player: Node3D, roll: float, height: float) -> void:
+	player.body_visual.rotation.z=roll
+	# Rotate around the hip, keeping its world centre over the physical body.
+	var compensation:=Basis(Vector3.UP,player.body_visual.rotation.y)*Vector3(.88*sin(roll),0,0)
+	player.body_visual.position.x=compensation.x
+	player.body_visual.position.z=compensation.z
+	player.body_visual.position.y=height-.88*cos(roll)
+
+func _slide_recovery_pose(player: Node3D) -> void:
+	var recovery: float = 1-clampf(player.recovery_remaining/player.slide_recovery_duration,0,1)
+	var side:=1.0 if player.slide_right else -1.0
+	var roll: float = side*(.98+slide_style)*(1-smoothstep(.12,.85,recovery))
+	_side_hip(player,roll,lerpf(.24,.82,smoothstep(.25,.95,recovery)))
+	upper_body.rotation.x=-.35*(1-smoothstep(.5,1,recovery))
+	upper_body.rotation.z=side*.08*(1-recovery)
+	var direction: Vector3=player.action_direction
+	var lateral:=direction.cross(Vector3.UP)
+	var plant:=smoothstep(0,.32,recovery)
+	_pose_foot(player,player.slide_right,player.global_position+direction*lerpf(.64,.12,plant)+lateral*side*.12+Vector3.UP*.075)
+	_pose_foot(player,not player.slide_right,player.global_position+direction*lerpf(-.17,-.05,plant)-lateral*side*.12+Vector3.UP*.075)
+	_pose_hand(not player.slide_right,player.global_position-direction*.05-lateral*side*.32+Vector3.UP*.08,1-smoothstep(.3,.65,recovery))
+
+func _pose_hand(right: bool, target_world: Vector3, weight: float) -> void:
+	var arm: Node3D = right_arm if right else left_arm
+	var elbow: Node3D = right_elbow if right else left_elbow
+	var offset:=upper_body.to_local(target_world)-arm.position
+	var distance:=clampf(offset.length(),.1,.529)
+	var direction:=offset.normalized()
+	var pole:=Vector3.FORWARD-direction*Vector3.FORWARD.dot(direction)
+	if pole.length_squared()<.001:
+		pole=Vector3.RIGHT-direction*Vector3.RIGHT.dot(direction)
+	var along: float=(.27*.27+distance*distance-.26*.26)/(2*distance)
+	var joint:=direction*along+pole.normalized()*sqrt(maxf(0,.27*.27-along*along))
+	var rotation:=Quaternion(Vector3.DOWN,joint.normalized())
+	var lower:=direction*distance-joint
+	arm.quaternion=arm.quaternion.slerp(rotation,weight)
+	elbow.quaternion=elbow.quaternion.slerp(Quaternion(Vector3.DOWN,Basis(rotation).inverse()*lower.normalized()),weight)
 
 func _jump_pose(player: Node3D) -> void:
 	if not player.hop_launched:
@@ -523,5 +582,5 @@ func _leg_solution(player: Node3D, right: bool, target_world: Vector3) -> Array:
 	var hip_rotation := Quaternion(Vector3.DOWN, joint.normalized())
 	var lower: Vector3 = direction * distance - joint
 	var knee_rotation := Quaternion(Vector3.DOWN, (Basis(hip_rotation).inverse() * lower).normalized())
-	var boot_rotation := (Basis(hip_rotation) * Basis(knee_rotation)).inverse().get_rotation_quaternion()
+	var boot_rotation := ((Basis(hip_rotation) * Basis(knee_rotation)).inverse()*Basis(Vector3.BACK,-player.body_visual.rotation.z)).get_rotation_quaternion()
 	return [hip_rotation, knee_rotation, boot_rotation]

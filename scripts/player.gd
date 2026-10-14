@@ -124,6 +124,9 @@ var ragdoll: FootballPlayerRagdoll
 var getting_up := false
 var slide_victims: Array[int] = []
 var slide_entry_speed := 0.0
+var slide_right := true
+var slide_recovery := false
+var slide_recovery_duration := .85
 var grab_target: FootballPlayer
 var grab_held := false
 var grab_right := true
@@ -193,6 +196,12 @@ func _physics_process(delta: float) -> void:
 	tackle_remaining = maxf(0.0, tackle_remaining - delta)
 	close_control_remaining = maxf(0.0, close_control_remaining - delta)
 	recovery_remaining = maxf(0.0, recovery_remaining - delta)
+	if slide_recovery:
+		var rise:=smoothstep(.2,.95,1-recovery_remaining/slide_recovery_duration)
+		body_collider.shape.height=lerpf(.8,1.65,rise)
+		body_collider.position.y=lerpf(.43,.86,rise)
+		if recovery_remaining<=0:
+			slide_recovery=false
 	stagger_remaining = maxf(0.0, stagger_remaining - delta)
 	control_stride_remaining = maxf(0.0, control_stride_remaining - delta)
 	if action_kind != "":
@@ -664,7 +673,11 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 	slide_victims.clear()
 	last_boot_world = visual_controller.right_boot.global_position
 	if kind == "slide":
+		var lateral:=action_direction.cross(Vector3.UP)
+		slide_right=(ball.global_position-global_position).dot(lateral)<=0
+		slide_recovery=false
 		visual_controller.begin_slide(self)
+		last_boot_world=slide_boot().global_position
 		body_collider.shape.height = 0.8
 		body_collider.position.y = 0.43
 		slide_entry_speed = clampf(Vector3(linear_velocity.x, 0, linear_velocity.z).dot(action_direction) + 2.0, 2.0, 8.5)
@@ -677,7 +690,7 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 func _update_challenge() -> void:
 	if action_kind == "":
 		return
-	var boot_world: Vector3 = strike_boot().global_position if action_kind == "kick" else visual_controller.right_boot.global_position
+	var boot_world: Vector3 = strike_boot().global_position if action_kind == "kick" else slide_boot().global_position if action_kind=="slide" else visual_controller.right_boot.global_position
 	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
 		_slide_player_contacts(boot_world)
 	if not action_has_hit and is_instance_valid(action_ball):
@@ -738,10 +751,16 @@ func _update_challenge() -> void:
 	if action_elapsed >= action_duration:
 		if action_kind == "grab":
 			_release_grab("duration")
-		recovery_remaining = 0.65 if action_kind == "slide" else (0.0 if action_kind == "kick" else 0.25)
-		body_collider.shape.height = 1.65
-		body_collider.position.y = 0.86
+		slide_recovery=action_kind=="slide"
+		slide_recovery_duration=.85/agility_skill
+		recovery_remaining = slide_recovery_duration if slide_recovery else (0.0 if action_kind == "kick" else 0.25)
+		if not slide_recovery:
+			body_collider.shape.height = 1.65
+			body_collider.position.y = 0.86
 		action_kind = ""
+
+func slide_boot() -> Node3D:
+	return visual_controller.right_boot if slide_right else visual_controller.left_boot
 
 func _boot_distance(point: Vector3, start: Vector3, end: Vector3) -> float:
 	var segment := end - start
@@ -779,6 +798,10 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest, "ball_first": action_has_hit, "from_behind": direction.dot(other.aim) > .7, "studs_up": false, "dangerous_height": contact.y-other.global_position.y > .8})
 
 func reset_action() -> void:
+	slide_recovery=false
+	body_visual.position.x=0
+	body_visual.position.z=0
+	body_visual.rotation.z=0
 	buffered_remaining = 0
 	_release_grab("restart")
 	incoming_pass_from = ""
