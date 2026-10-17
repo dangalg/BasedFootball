@@ -8,9 +8,28 @@ var last_touch_id: String = ""
 var touches: int = 0
 var control_block_remaining: float = 0.0
 var control_candidate_id: String = ""
+var touch_serial: int = 0
+var impulse_audit: Array[Dictionary] = []
+var passer_block_id: String = ""
+var passer_block_remaining: float = 0.0
+var grip_holder_id: String = ""
+var pass_active: bool = false
+var pass_passer_id: String = ""
+var pass_receiver_id: String = ""
+var pass_team: int = -1
+var pass_target := Vector3.ZERO
+var pass_remaining: float = 0.0
+var pass_end_reason: String = ""
 
 func _physics_process(delta: float) -> void:
 	control_block_remaining = maxf(0, control_block_remaining - delta)
+	passer_block_remaining = maxf(0, passer_block_remaining - delta)
+	if passer_block_remaining <= 0:
+		passer_block_id = ""
+	if pass_active:
+		pass_remaining = maxf(0, pass_remaining - delta)
+		if pass_remaining <= 0:
+			clear_pass("expired")
 
 func _ready() -> void:
 	mass = 0.43
@@ -58,11 +77,36 @@ func _ready() -> void:
 		FootballArt.mesh(self, patch, black)
 
 func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vector3.ZERO) -> void:
+	if pass_active:
+		clear_pass("receiver_touch" if player_id == pass_receiver_id else "intercepted")
 	last_touch_team = team
 	last_touch_id = player_id
 	touches += 1
+	touch_serial += 1
+	# Observe the actual shared impulse application point; this log supplies no
+	# possession, contacts, forces or corrections to the simulation.
+	impulse_audit.append({"physics_frame":Engine.get_physics_frames(),"serial":touch_serial,"player_id":player_id,"team":team,"impulse":[impulse.x,impulse.y,impulse.z],"before_velocity":[linear_velocity.x,linear_velocity.y,linear_velocity.z]})
+	if impulse_audit.size() > 2048:
+		impulse_audit.pop_front()
 	sleeping = false
 	apply_impulse(impulse, offset)
+
+func begin_pass(passer: String, receiver: String, team: int, target: Vector3, duration: float) -> void:
+	pass_active = true
+	pass_passer_id = passer
+	pass_receiver_id = receiver
+	pass_team = team
+	pass_target = target
+	pass_remaining = duration
+	pass_end_reason = ""
+
+func clear_pass(reason: String) -> void:
+	pass_active = false
+	pass_remaining = 0.0
+	pass_end_reason = reason
+	pass_receiver_id = ""
+	pass_passer_id = ""
+	pass_team = -1
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# Rolling resistance acts on every team equally; no possession attachment.

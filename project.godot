@@ -2,9 +2,9 @@
 config_version=5
 
 [application]
-config/name="Based Football - Recovered 3v3"
+config/name="Based Football - 4v4 Keeper Preview"
 config/use_custom_user_dir=true
-config/custom_user_dir_name="BasedFootball-Recovered-3v3"
+config/custom_user_dir_name="BasedFootball-KeeperPreview"
 run/main_scene="res://scenes/match.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 

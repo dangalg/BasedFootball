@@ -1,6 +1,9 @@
 class_name FootballPlayerVisual
 extends RefCounted
 
+const CONTROL_HIP_OFFSET := -0.20
+const HIP_RESPONSE := 12.0
+
 var left_knee: Node3D
 var right_knee: Node3D
 var left_arm: Node3D
@@ -109,6 +112,8 @@ func build(player: Node3D) -> void:
 func animate(player: Node3D, delta: float) -> void:
 	var previous_leg_rotation: Quaternion = player.right_leg.quaternion
 	var previous_knee_rotation: Quaternion = right_knee.quaternion
+	var previous_left_leg_rotation: Quaternion = player.left_leg.quaternion
+	var previous_left_knee_rotation: Quaternion = left_knee.quaternion
 	var velocity := Vector3(player.linear_velocity.x, 0, player.linear_velocity.z)
 	var facing: Vector3 = player.action_direction if player.action_kind != "" else player.aim
 	# Intent can reverse before momentum does. Face the actual running direction
@@ -116,7 +121,7 @@ func animate(player: Node3D, delta: float) -> void:
 	if player.action_kind == "" and not player.jockey and velocity.length() > 0.65:
 		facing = velocity.normalized()
 	if player.action_kind == "kick":
-		facing = Vector3(player.kick_target_offset.x, 0, player.kick_target_offset.z).normalized()
+		facing = player.action_direction
 	if facing.length_squared() > 0.1:
 		player.body_visual.rotation.y = lerp_angle(player.body_visual.rotation.y, atan2(-facing.x, -facing.z), 12.0 * delta)
 	var local_velocity: Vector3 = player.body_visual.basis.inverse() * velocity
@@ -127,10 +132,10 @@ func animate(player: Node3D, delta: float) -> void:
 	var touching: bool = player.dribble_active
 	var touch_weight := 0.0
 	if touching:
-		if player.dribble_elapsed <= player.dribble_contact_time:
+		if not player.dribble_has_hit:
 			touch_weight = smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		else:
-			touch_weight = 1 - smoothstep(player.dribble_contact_time + 0.025, player.dribble_duration - 0.01, player.dribble_elapsed)
+			touch_weight = 1 - smoothstep(player.dribble_follow_end - 0.075, player.dribble_follow_end, player.dribble_elapsed)
 	var rising: bool = not sliding and player.body_visual.position.y < -0.25 and player.recovery_remaining > 0
 	player.body_visual.rotation.x = 0
 	player.body_visual.rotation.z = 0
@@ -140,11 +145,11 @@ func animate(player: Node3D, delta: float) -> void:
 		hip_offset = -0.22 * smoothstep(0, 0.06, player.action_elapsed)
 	elif standing:
 		hip_offset = -0.20 * sin(clampf(player.action_elapsed / player.action_duration, 0, 1) * PI)
-	elif player.controlling_ball():
-		hip_offset = -0.20
+	elif touching:
+		hip_offset = CONTROL_HIP_OFFSET * touch_weight
 	elif rising:
 		hip_offset = -0.55 * smoothstep(0, 0.65, player.recovery_remaining)
-	player.body_visual.position.y = lerpf(player.body_visual.position.y, hip_offset, minf(1, delta * 12))
+	player.body_visual.position.y = lerpf(player.body_visual.position.y, hip_offset, minf(1, delta * HIP_RESPONSE))
 	upper_body.rotation.x = lerpf(upper_body.rotation.x, 0.85 if sliding or rising else local_velocity.z * 0.022 - (0.18 if standing or kicking else 0.0), minf(1, 18 * delta))
 	upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025, minf(1, 12 * delta))
 	# Jockeying can intentionally backpedal while looking at the ball.
@@ -165,10 +170,14 @@ func animate(player: Node3D, delta: float) -> void:
 	# a negative angle bent both elbows towards the back of the torso.
 	left_elbow.rotation.x = 0.6 + stride * 0.3
 	right_elbow.rotation.x = 0.6 + stride * 0.3
-	if kicking or standing or rising:
+	if kicking:
+		var support_right: bool = not player.kick_foot_right
+		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04))
+	elif standing or rising:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
 	elif touching:
-		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04), touch_weight)
+		var support_right: bool = not player.dribble_foot_right
+		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04), touch_weight)
 	if rising:
 		_pose_foot(player, true, player.global_position + player.body_visual.basis * Vector3(0.12, 0.075, -0.04))
 	if sliding:
@@ -181,21 +190,23 @@ func animate(player: Node3D, delta: float) -> void:
 		_pose_foot(player, true, player.global_position + player.action_direction * lerpf(0.12, 0.68, extension) + Vector3.UP * 0.095)
 	elif player.action_kind == "kick":
 		var contact: Vector3 = player.global_position + player.kick_target_offset
-		var backswing: Vector3 = player.body_visual.to_global(Vector3(0.105, 0.18, 0.26))
+		var start: Vector3 = player.global_position + player.kick_start_foot_offset
+		var backswing: Vector3 = contact - player.action_direction * 0.22 + Vector3.UP * 0.12
 		var target: Vector3
 		if player.action_elapsed <= player.kick_contact_time:
-			target = backswing.lerp(contact, smoothstep(0, player.kick_contact_time, player.action_elapsed))
+			var swing: float = player.action_elapsed / maxf(player.kick_contact_time, 0.00001)
+			target = start.lerp(backswing, smoothstep(0, 0.35, swing)) if swing < 0.35 else backswing.lerp(contact, smoothstep(0.35, 1.0, swing))
 		else:
 			var follow := smoothstep(player.kick_contact_time, player.action_duration, player.action_elapsed)
 			target = contact + player.action_direction * 0.22 * follow + Vector3.UP * 0.24 * follow
-		_pose_foot(player, true, target)
+		_pose_foot(player, player.kick_foot_right, target)
 	elif touching:
 		var swing := smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
-		if player.dribble_elapsed > player.dribble_contact_time:
-			var follow := smoothstep(player.dribble_contact_time, player.dribble_duration, player.dribble_elapsed)
+		if player.dribble_has_hit:
+			var follow := smoothstep(player.dribble_follow_end - 0.075, player.dribble_follow_end, player.dribble_elapsed)
 			offset += player.dribble_follow_direction * 0.12 * follow + Vector3.UP * sin(follow * PI) * 0.06
-		_pose_foot(player, true, player.global_position + offset, touch_weight)
+		_pose_foot(player, player.dribble_foot_right, player.global_position + offset, touch_weight)
 	if player.hop_active and player.hop_elapsed > 0.08:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.26, -0.12))
 		_pose_foot(player, true, player.global_position + player.body_visual.basis * Vector3(0.12, 0.30, -0.18))
@@ -215,6 +226,8 @@ func animate(player: Node3D, delta: float) -> void:
 		# the smoothed boot, so smoothing cannot manufacture an invisible touch.
 		player.right_leg.quaternion = _limit_rotation(previous_leg_rotation, player.right_leg.quaternion, delta * 18)
 		right_knee.quaternion = _limit_rotation(previous_knee_rotation, right_knee.quaternion, delta * 18)
+		player.left_leg.quaternion = _limit_rotation(previous_left_leg_rotation, player.left_leg.quaternion, delta * 18)
+		left_knee.quaternion = _limit_rotation(previous_left_knee_rotation, left_knee.quaternion, delta * 18)
 
 func _limit_rotation(previous: Quaternion, target: Quaternion, max_angle: float) -> Quaternion:
 	var angle := previous.angle_to(target)
@@ -242,3 +255,27 @@ func _pose_foot(player: Node3D, right: bool, target_world: Vector3, weight: floa
 	leg.quaternion = leg.quaternion.slerp(hip_rotation, weight)
 	knee.quaternion = knee.quaternion.slerp(knee_rotation, weight)
 	boot.quaternion = boot.quaternion.slerp(boot_rotation, weight)
+
+func predicted_control_hip_shift(player: Node3D, delay: float, target_y: float = CONTROL_HIP_OFFSET) -> float:
+	# Predict the same hip interpolation that an accepted swing will request.
+	# The actual animated boot still has to meet the ball before any impulse.
+	var current_y: float = player.body_visual.position.y
+	var predicted_y := current_y
+	var remaining := maxf(0, delay)
+	var elapsed := 0.0
+	var physics_step := 1.0 / float(Engine.physics_ticks_per_second)
+	while remaining > 0.00001:
+		var step := minf(physics_step, remaining)
+		elapsed += step
+		var weight := smoothstep(0, 0.06 if is_equal_approx(target_y, -0.22) else maxf(delay, 0.00001), elapsed)
+		predicted_y = lerpf(predicted_y, target_y * weight, minf(1, step * HIP_RESPONSE))
+		remaining -= step
+	return predicted_y - current_y
+
+func foot_reach_gap(player: Node3D, target_world: Vector3, right: bool = true, hip_shift: float = 0.0) -> float:
+	# Use the same hip and limb length as the visible two-bone solver. This
+	# reports unreachable distance; it never moves a foot or enlarges contact.
+	var leg: Node3D = player.right_leg if right else player.left_leg
+	var target: Vector3 = player.body_visual.to_local(target_world)
+	var shift: Vector3 = player.body_visual.global_basis.inverse() * (Vector3.UP * hip_shift)
+	return maxf(0, target.distance_to(leg.position + shift) - 0.749)

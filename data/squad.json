@@ -36,6 +36,18 @@
       "stamina": 1.1,
       "balance": 1.15,
       "agility": 0.9
+    },
+    {
+      "id": "keeper",
+      "name": "DAN",
+      "number": 1,
+      "role": "Keeper",
+      "mass": 80.0,
+      "pace": 5.8,
+      "touch": 0.9,
+      "stamina": 1.0,
+      "balance": 1.1,
+      "agility": 1.0
     }
   ]
 }

@@ -4,6 +4,11 @@ signal match_finished
 
 const DURATION := 180.0
 var players: Array[FootballPlayer] = []
+var home_outfield: Array[FootballPlayer] = []
+var away_outfield: Array[FootballPlayer] = []
+var outfield_teams: Array = [home_outfield, away_outfield]
+var keepers: Array[FootballPlayer] = []
+var reception := FootballReception.new()
 var ball: FootballBall
 var camera: Camera3D
 var hud: FootballHUD
@@ -226,14 +231,40 @@ func _build_players() -> void:
 			player.dribble_contact.connect(_on_dribble_contact.bind(player))
 			player.physical_event.connect(_on_physical_event.bind(player))
 			players.append(player)
+			if team == 0:
+				home_outfield.append(player)
+			else:
+				away_outfield.append(player)
+	for team in range(2):
+		var keeper := FootballGoalkeeper.new()
+		keeper.team = team
+		squad.apply_to(keeper,3)
+		if team == 1:
+			keeper.player_id = "opponent_keeper"
+			keeper.player_name = "LEE"
+			var entry: Dictionary = squad.entries[3]
+			keeper.touch_skill = float(entry["touch"])
+			keeper.stamina_trait = float(entry["stamina"])
+			keeper.mass = float(entry["mass"])
+			keeper.balance_skill = float(entry.get("balance",1.0))
+			keeper.agility_skill = float(entry.get("agility",1.0))
+		keeper.name = keeper.player_id
+		add_child(keeper)
+		keeper.strike_contact.connect(_on_strike_contact.bind(keeper))
+		keeper.dribble_contact.connect(_on_dribble_contact.bind(keeper))
+		keeper.physical_event.connect(_on_physical_event.bind(keeper))
+		players.append(keeper)
+		keepers.append(keeper)
 
 func reset_positions(kickoff_team: int) -> void:
+	reception.reset(ball)
 	for i in range(players.size()):
 		var player := players[i]
-		var index := i % 3
+		var field: Array[FootballPlayer] = home_outfield if player.team == 0 else away_outfield
+		var index: int = field.find(player)
 		var side := -1.0 if player.team == 0 else 1.0
-		var pos := Vector3(side * [3.0, 7.0, 11.0][index], 0.06, [-1.0, 5.0, -4.0][index])
-		if player.team == kickoff_team and index == 0:
+		var pos := Vector3(side*16.8,0.06,0) if player.is_goalkeeper else Vector3(side * [3.0, 7.0, 11.0][index], 0.06, [-1.0, 5.0, -4.0][index])
+		if not player.is_goalkeeper and player.team == kickoff_team and index == 0:
 			pos = Vector3(side * 0.8, 0.06, 0)
 		player.global_position = pos
 		player.linear_velocity = Vector3.ZERO
@@ -249,6 +280,9 @@ func reset_positions(kickoff_team: int) -> void:
 	ball.angular_velocity = Vector3.ZERO
 	ball.control_block_remaining = 0
 	ball.control_candidate_id = ""
+	ball.passer_block_id = ""
+	ball.passer_block_remaining = 0.0
+	ball.grip_holder_id = ""
 	# The new kickoff belongs to its receiving side, not the previous scorer.
 	# Clear individual touch continuity so it cannot survive a dead-ball restart.
 	ball.last_touch_team = kickoff_team
@@ -261,8 +295,8 @@ func reset_positions(kickoff_team: int) -> void:
 func _select(index: int) -> void:
 	if controlled != null:
 		controlled.jockey = false
-	selected_index = clampi(index, 0, 2)
-	controlled = players[selected_index]
+	selected_index = clampi(index, 0, home_outfield.size()-1)
+	controlled = home_outfield[selected_index]
 	for player in players:
 		player.selected = player == controlled
 	charging = false
@@ -271,12 +305,12 @@ func _select(index: int) -> void:
 func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 	var best := -INF
 	var winner := selected_index
-	for i in range(3):
+	for i in range(home_outfield.size()):
 		if i == selected_index:
 			continue
-		var value := -players[i].global_position.distance_to(ball.global_position)
+		var value := -home_outfield[i].global_position.distance_to(ball.global_position)
 		if direction.length_squared() > 0.1:
-			var offset := players[i].global_position - controlled.global_position
+			var offset := home_outfield[i].global_position - controlled.global_position
 			offset.y = 0
 			value = offset.normalized().dot(direction) * 100 - offset.length()
 		if value > best:
@@ -294,6 +328,7 @@ func _physics_process(delta: float) -> void:
 			player.intent = Vector3.ZERO
 		return
 	remaining = maxf(0, remaining - delta)
+	reception.update(self,delta)
 	if decision_driver != null:
 		decision_driver.decide(delta)
 	var movement: Vector2 = Input.get_vector("left", "right", "up", "down") if decision_driver == null else decision_driver.movement
@@ -332,7 +367,7 @@ func _physics_process(delta: float) -> void:
 			_record("shoulder", controlled, {"source": "controller"})
 	for player in players:
 		if player != controlled:
-			var action := FootballAI.decide(player, players, ball, delta)
+			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta)
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
@@ -346,7 +381,26 @@ func _physics_process(delta: float) -> void:
 		_finish_match()
 
 func _attacking_contact() -> bool:
-	return controlled.reach_ball(ball) and ball.last_touch_team in [-1, controlled.team]
+	# This selects a nearby strike opportunity, not ownership of the ball.
+	# A reachable opponent touch or incoming pass can be hit first-time.
+	return ball.grip_holder_id.is_empty() and controlled.predict_strike_reach(ball, 0.22)
+
+func _strike_direction() -> Vector3:
+	var stick := Vector3(controlled.intent.x, 0, controlled.intent.z)
+	return stick.normalized() if stick.length_squared() > 0.0025 else controlled.aim.normalized()
+
+func _intended_receiver(direction: Vector3) -> FootballPlayer:
+	# The stick still chooses the kick direction. This chooses who should read
+	# that delivery, without bending the ball towards an unavailable teammate.
+	return FootballReception.choose_receiver(controlled, players, ball.global_position, direction)
+
+func _request_delivery(kind: String, strength: float, lift: float) -> void:
+	var direction := _strike_direction()
+	var receiver := _intended_receiver(direction)
+	# A kick may miss. Reading an intended receiver never rotates the strike
+	# towards that player or creates a successful contact.
+	if controlled.kick(ball, direction, strength, lift, kind):
+		controlled.pending_receiver_id = receiver.player_id if receiver != null else ""
 
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if pressed.get("hop", false):
@@ -374,35 +428,22 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if charging:
 		charge = minf(1, charge + delta / 0.8)
 		if pressed.get("primary_release", false):
-			controlled.kick(ball, controlled.aim, lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), "shot")
+			if controlled.kick(ball, _strike_direction(), lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), "shot"):
+				controlled.pending_receiver_id = ""
 			charging = false
 			charge = 0
 	if pressed.get("square", false):
 		if _attacking_contact():
-			controlled.kick(ball, controlled.aim, 12.5, 5.2, "lob")
+			_request_delivery("lob", 12.5, 5.2)
 		else:
 			controlled.slide(ball)
-	if pressed.get("pass", false) and _attacking_contact():
-		controlled.kick(ball, controlled.aim, 10.5, 0.12, "pass")
-	if pressed.get("through", false) and _attacking_contact():
-		var direction := controlled.aim
-		var receiver: FootballPlayer = null
-		var best := 0.35
-		for teammate in players:
-			if teammate == controlled or teammate.team != controlled.team:
-				continue
-			var offset := teammate.global_position - controlled.global_position
-			offset.y = 0
-			var alignment := offset.normalized().dot(controlled.aim)
-			if alignment > best:
-				best = alignment
-				receiver = teammate
-		if receiver != null:
-			direction = receiver.global_position + receiver.linear_velocity * 0.55 + controlled.aim * 1.8 - controlled.global_position
-			direction.y = 0
-		controlled.kick(ball, direction, 13.5, 0.14, "through")
+	if pressed.get("pass", false):
+		_request_delivery("pass", 10.5, 0.12)
+	if pressed.get("through", false):
+		_request_delivery("through", 13.5, 0.14)
 
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
+	reception.queue_delivery(player,kind,ball)
 	_record(kind, player, {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance})
 	sound.play_event("kick")
 
@@ -410,14 +451,24 @@ func _on_dribble_contact(player: FootballPlayer) -> void:
 	_record("touch", player)
 
 func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
+	if kind == "keeper_release":
+		reception.queue_delivery(player,str(detail.get("kind","roll")),ball,str(detail.get("receiver_id","")))
 	_record(kind, player, detail)
 
 func _control_ball() -> FootballPlayer:
+	if not ball.grip_holder_id.is_empty():
+		ball.control_candidate_id = ""
+		return null
+	for player: FootballPlayer in players:
+		if player.player_id == ball.pass_receiver_id and ball.pass_active and not player.is_goalkeeper:
+			player.receive(ball)
 	# One nearest eligible foot per tick, with a small continuity preference.
 	# This never blocks tackles or body collisions and applies equally to both teams.
 	var candidate: FootballPlayer = null
 	var best_distance := INF
 	for player in players:
+		if player.is_goalkeeper:
+			continue
 		if not player.can_control(ball):
 			continue
 		var offset := ball.global_position - player.global_position
@@ -456,6 +507,9 @@ func _check_goal() -> void:
 		reset_positions(1 - scoring)
 
 func _finish_match() -> void:
+	reception.reset(ball)
+	for keeper: FootballPlayer in keepers:
+		(keeper as FootballGoalkeeper).drop_ball("full_time")
 	phase = "finished"
 	match_count += 1
 	for player in players:
@@ -472,8 +526,9 @@ func rematch() -> void:
 	scores = [0, 0]
 	phase = "playing"
 	hud.overlay.hide()
-	for i in range(3):
-		squad.apply_to(players[i], i)
+	for i in range(home_outfield.size()):
+		squad.apply_to(home_outfield[i], i)
+	squad.apply_to(keepers[0],3)
 	for player in players:
 		player.energy = 1.0
 		player.active_seconds = 0
@@ -528,8 +583,9 @@ func _process(delta: float) -> void:
 	camera.position = camera_focus + Vector3(0, 34, 29)
 	camera.look_at(camera_focus)
 	var player_pos := controlled.get_global_transform_interpolated().origin
-	aim_line.position = player_pos + controlled.aim * 1.5 + Vector3(0, 0.05, 0)
-	aim_line.rotation.y = atan2(controlled.aim.x, controlled.aim.z)
+	var strike_direction := _strike_direction()
+	aim_line.position = player_pos + strike_direction * 1.5 + Vector3(0, 0.05, 0)
+	aim_line.rotation.y = atan2(strike_direction.x, strike_direction.z)
 	aim_line.visible = phase == "playing"
 	hud.update_match(scores, remaining, controlled, charge)
 	var devices := Input.get_connected_joypads()

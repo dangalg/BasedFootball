@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Godot-4.6.1-478CBF?style=flat-square" alt="Godot 4.6.1" />
   <img src="https://img.shields.io/badge/Platform-Windows_PC-253B45?style=flat-square" alt="Windows PC" />
-  <img src="https://img.shields.io/badge/Match-3v3-39BDB4?style=flat-square" alt="3 versus 3" />
+  <img src="https://img.shields.io/badge/Match-4v4-39BDB4?style=flat-square" alt="4 versus 4" />
   <img src="https://img.shields.io/badge/Status-Playable_prototype-E9C463?style=flat-square" alt="Playable prototype" />
 </p>
 <p align="center">
@@ -21,7 +21,13 @@
 
 ![The courtyard pitch, angled camera and match HUD](docs/images/courtyard.png)
 
-<p align="center"><em>Actual prototype capture from the rendered handling test.</em></p>
+<p align="center"><em>Recovered 3v3 prototype capture. This branch adds one keeper per side.</em></p>
+
+This is the **4v4 keeper preview**, built from the recovered version Dan chose
+as fun. It adds physical keeper saves and distribution, kick-ahead dribbling,
+loose-ball strikes and active pass receivers. See the [preview and verification procedure](docs/KEEPER_PREVIEW.md).
+The [4v4 verification record](docs/VERIFICATION_4V4.md) separates the recorded
+diagnostics from the user's playable evaluation.
 
 ## Football with something to feel
 
@@ -35,7 +41,7 @@ bounded, varied reaction timing, without score-based boosts or future controller
 
 | On the pitch | In your squad |
 | --- | --- |
-| **3v3 courtyard matches** with small goals and rebound boards | **Permanent players** with names, roles and participation XP |
+| **4v4 courtyard matches** with three outfield players, one keeper and rebound boards | **Permanent players** with names, roles and participation XP |
 | **Free physical ball** with gravity, spin, drag and collisions | **Bounded growth** in touch, stamina and balance |
 | **Foot-contact dribbling and kicks**, including ground, lofted and through passes | **Local career saves** retained across matches |
 | **Standing, sliding and shoulder challenges** with contact windows and recovery | **No packs or transfers** to keep replacing your team |
@@ -43,7 +49,8 @@ bounded, varied reaction timing, without score-based boosts or future controller
 ## Play
 
 **Current scope:** Windows PC, solo against AI, controller or keyboard. Three-minute
-matches, an angled camera, no keepers. Blue attacks right; orange attacks left.
+matches, an angled camera and AI keepers. Blue attacks right; orange attacks left.
+Switching stays with your three outfield players.
 
 This repository contains the source. To make the Windows playable bundle:
 
@@ -107,7 +114,7 @@ ball shortens strides and sharp turns require braking.
 Saves live at:
 
 ```text
-%APPDATA%\Godot\app_userdata\Based Football\squad.json
+%APPDATA%\BasedFootball-KeeperPreview\squad.json
 ```
 
 ## Where the prototype stands
@@ -117,7 +124,8 @@ kicks, AI matches, switching, local progression and original procedural court,
 athlete and sound assets. Strong slide contacts can produce jointed physical falls;
 lighter contacts cause stumbles. Players recover through a blended get-up sequence.
 AI choices, reaction timing and kick aim vary; physical impact outcomes use no
-random rolls. Multiplayer and keepers are not implemented.
+random rolls. Keeper catches, parries and distribution use visible glove contact
+and a bounded physical grip. Multiplayer is not implemented.
 Animation, controller feel and match balance are still being refined.
 
 Recorded checks cover production physics, contact timing, turns, sprinting,
@@ -125,8 +133,9 @@ tackles and running direction. Rendered captures are inspected; controller
 hardware and subjective feel still need human playtesting. See the
 [verification record](VERIFICATION.md) for results, failed iterations and limits.
 
-The local realism update passed **22 impact/jump checks**, **82 handling checks**
-and **11 live AI checks**, including a physical fall and recovery during the match.
+Historical tests in the recovered 3v3 base covered **22 impact/jump checks**,
+**82 handling checks** and **11 live AI checks**. These are not proof of the
+4v4 preview; its acceptance session is documented separately.
 
 ## Explore the project
 

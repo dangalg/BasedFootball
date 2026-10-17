@@ -4,8 +4,31 @@ extends RefCounted
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
 static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float) -> String:
+	if player.is_goalkeeper:
+		return ""
 	if player.ragdoll != null or player.hop_active:
 		return ""
+	# An incoming pass remains a reception task until actual first contact.
+	# Human selection bypasses this AI path in the normal match loop.
+	if ball.pass_active and ball.pass_receiver_id == player.player_id:
+		var target := FootballReception.interception_point(player,ball)
+		var offset := target-player.global_position
+		offset.y = 0
+		var incoming := Vector3(ball.linear_velocity.x,0,ball.linear_velocity.z)
+		var gap := Vector3(ball.global_position.x-player.global_position.x,0,ball.global_position.z-player.global_position.z).length()
+		player.aim = (ball.global_position-player.global_position)*Vector3(1,0,1)
+		player.aim = player.aim.normalized()
+		var desired := offset.normalized()*minf(offset.length()*2.2,player.pace)
+		if gap < 1.6:
+			# Meet the lane, then move with the delivery rather than charging
+			# head-on through it or turning to attack before the first touch.
+			desired = (incoming*.35+offset*2.0).limit_length(player.pace*.65)
+		player.sprint = gap > 2.4
+		var base_speed := player.pace if player.sprint and player.energy > .05 else player.pace*.66
+		player.intent = desired/maxf(base_speed,.1)
+		if gap < 1.45:
+			player.receive(ball)
+		return "receiving"
 	player.reaction_timer -= delta
 	if player.reaction_timer > 0.0:
 		return ""
@@ -29,15 +52,46 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	var nearest: FootballPlayer = null
 	var nearest_distance := INF
 	var teammate_holder: FootballPlayer = null
+	var teammate_chaser: FootballPlayer = null
+	var opponent_carrier: FootballPlayer = null
 	for other in players:
+		if other.is_goalkeeper:
+			continue
 		if other.team != player.team:
+			# Last touch alone is history, not an opponent in possession. A
+			# loose ball must be collected rather than automatically tackled.
+			if other.controlling_ball() or other.chasing_ball(ball):
+				if opponent_carrier == null or other.global_position.distance_squared_to(ball.global_position) < opponent_carrier.global_position.distance_squared_to(ball.global_position):
+					opponent_carrier = other
 			continue
 		var distance := other.global_position.distance_to(ball.global_position)
 		if distance < nearest_distance:
 			nearest_distance = distance
 			nearest = other
-		if other.reach_ball(ball, 1.4):
+		if other.controlling_ball():
 			teammate_holder = other
+		elif other.chasing_ball(ball):
+			teammate_chaser = other
+	# A genuine kick-ahead dribbler stays the attack reference during the
+	# bounded chase. This only supplies intent; opponents may still win it.
+	if teammate_holder != null:
+		nearest = teammate_holder
+	elif teammate_chaser != null:
+		nearest = teammate_chaser
+		teammate_holder = teammate_chaser
+	# Keep the other two players available while the designated receiver meets
+	# the flight. They can still intercept a loose ball after that intent ends.
+	if ball.pass_active and ball.pass_team == player.team:
+		for other in players:
+			if other.player_id == ball.pass_receiver_id:
+				nearest = other
+				break
+	if not ball.grip_holder_id.is_empty():
+		for other in players:
+			if other.player_id == ball.grip_holder_id and other.team == player.team:
+				teammate_holder = other
+				nearest = other
+				break
 	var target := ball.global_position
 	if nearest != player:
 		var lane := (-5.0 if player.shirt_number == 7 else 5.0) + player.ai_lane_offset
@@ -48,37 +102,42 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			support_x = ball.global_position.x - attack * 6.0
 		target = Vector3(clampf(support_x, -13.0, 13.0), 0, clampf(ball.global_position.z * 0.35 + lane, -9, 9))
 	else:
-		# Approach from behind the ball to carry it towards the opposing goal.
+		# Follow the observed free-ball trajectory between real touches;
+		# switching back to a behind-ball approach would abandon the run.
 		var goal_direction := (goal - ball.global_position).normalized()
-		if player.global_position.distance_to(ball.global_position) > 1.5:
-			target = ball.global_position - goal_direction * 0.65
+		if player.chasing_ball(ball):
+			target = player.chase_target(ball)
+		elif not player.controlling_ball():
+			target = ball.global_position - goal_direction * 0.55
 		else:
 			target = goal
 	var direction := target - player.global_position
 	direction.y = 0.0
-	player.intent = direction.normalized() if direction.length() > 0.65 else Vector3.ZERO
+	var arrival_radius := 0.12 if nearest == player and not player.controlling_ball() else 0.65
+	player.intent = direction.normalized() if direction.length() > arrival_radius else Vector3.ZERO
 	player.aim = player.intent if player.intent.length_squared() > 0.1 else Vector3(attack, 0, 0)
-	player.sprint = nearest == player and direction.length() > 4 and player.energy > 0.25 and confidence < 0.85
+	var chasing := nearest == player and player.chasing_ball(ball)
+	var catch_up_run := chasing and direction.length() > 0.7 and Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z).length() > player.pace * 0.6
+	player.sprint = nearest == player and (direction.length() > 4 or catch_up_run) and player.energy > 0.25 and confidence < 0.85
 	# Defenders use the same finite contact windows and recovery as the controller.
-	if ball.last_touch_team != player.team and ball.last_touch_team >= 0 and nearest == player:
-		for opponent in players:
-			if opponent.team == player.team:
-				continue
-			var separation := opponent.global_position - player.global_position
-			separation.y = 0
-			if separation.length() < 0.92 and absf(separation.normalized().dot(player.aim)) < 0.8:
-				if confidence < 0.75 and player.shoulder(ball):
-					return "shoulder"
+	if ball.grip_holder_id.is_empty() and opponent_carrier != null and nearest == player:
+		var separation := opponent_carrier.global_position - player.global_position
+		separation.y = 0
+		if separation.length() < 0.92 and absf(separation.normalized().dot(player.aim)) < 0.8:
+			if confidence < 0.75 and player.shoulder(ball):
+				return "shoulder"
 		var ball_offset := ball.global_position - player.global_position
 		ball_offset.y = 0
-		if ball_offset.length() < 1.25:
+		if ball_offset.length() < 1.25 and separation.length() < 1.8:
 			player.aim = ball_offset.normalized()
 			if confidence < 0.8 and player.tackle(ball):
 				return "tackle"
-		elif ball_offset.length() < 2.6 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
+		elif ball_offset.length() < 2.6 and separation.length() < 2.8 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
 			if confidence < 0.35 + player.ai_style * 0.35 and player.slide(ball):
 				return "slide"
-	if not player.reach_ball(ball):
+	# A first-time pass or shot can be queued against an actually reachable
+	# moving ball without first claiming a close-control state.
+	if not ball.grip_holder_id.is_empty() or not player.predict_strike_reach(ball, 0.18):
 		return ""
 	var shot_direction := goal - player.global_position
 	shot_direction.y = 0
@@ -95,7 +154,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		var receiver: FootballPlayer = null
 		var best := -INF
 		for other in players:
-			if other == player or other.team != player.team:
+			if other == player or other.team != player.team or other.is_goalkeeper:
 				continue
 			var advance := (other.global_position.x - player.global_position.x) * attack
 			advance += player.ai_rng.randf_range(-1.5, 1.5)
@@ -105,6 +164,8 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if receiver != null and best > 0.5:
 			var pass_direction := receiver.global_position - player.global_position
 			pass_direction.y = 0
+			player.pending_receiver_id = receiver.player_id
 			if confidence < 0.85 and player.kick(ball, pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / player.touch_skill), clampf(pass_direction.length() * player.ai_rng.randf_range(1.2, 1.4), 7, 14), 0.12, "pass"):
 				return "pass"
+			player.pending_receiver_id = ""
 	return ""
