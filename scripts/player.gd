@@ -13,6 +13,10 @@ const RECEIVE_PREPARE_REACH := 1.45
 const CHASE_MAX_DISTANCE := 3.0
 const CHASE_MEMORY_SECONDS := 1.6
 const MAX_KICK_IMPULSE := 18.0
+const STEER_ONSET_ANGLE := PI / 15.0 # 12 degrees.
+const STEER_MAX_REQUEST := PI * 0.5
+const STEER_MAX_ROTATION := PI / 9.0 # At most 20 degrees per real contact.
+const STEER_PREPARE_LEAD := 0.055
 
 var team: int = 0
 var player_id: String = ""
@@ -21,6 +25,9 @@ var shirt_number: int = 7
 var role: String = ""
 var is_goalkeeper: bool = false
 var pending_receiver_id: String = ""
+var last_received_from: String = ""
+var last_received_frame: int = -100000
+var last_delivery_frame: int = -100000
 var pace: float = 6.6
 var touch_skill: float = 1.0
 var stamina_trait: float = 1.0
@@ -83,6 +90,7 @@ var dribble_follow_direction := Vector3.RIGHT
 var dribble_foot_right: bool = true
 var preferred_touch_foot_right: bool = true
 var dribble_trap: bool = false
+var dribble_steer: bool = false
 var dribble_phase: String = "idle"
 var dribble_follow_end: float = 0.0
 var chase_ball: FootballBall
@@ -298,6 +306,12 @@ func _predicted_foot_gap(ball: FootballBall, delay: float, right: bool = true, h
 func _flat(value: Vector3) -> Vector3:
 	return Vector3(value.x, 0, value.z)
 
+func _incoming_turn_angle(incoming: Vector3, requested: Vector3) -> float:
+	var horizontal := _flat(incoming)
+	if horizontal.length_squared() < 0.09 or requested.length_squared() < 0.0025:
+		return 0.0
+	return horizontal.normalized().signed_angle_to(requested.normalized(), Vector3.UP)
+
 func _boot(right: bool) -> Node3D:
 	return visual_controller.right_boot if right else visual_controller.left_boot
 
@@ -439,7 +453,7 @@ func can_control(ball: FootballBall) -> bool:
 func dribble(ball: FootballBall) -> bool:
 	if receiving_active or (ball.pass_active and ball.pass_receiver_id == player_id):
 		return false
-	if dribble_active or touch_cooldown > 0.0 or not can_control(ball):
+	if dribble_active or not can_control(ball):
 		return false
 	var relative := ball.global_position - global_position
 	relative.y = 0
@@ -447,9 +461,17 @@ func dribble(ball: FootballBall) -> bool:
 	var ball_velocity := Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z)
 	var stick := minf(intent.length(), 1.0)
 	var requested := intent.normalized() if stick > 0.05 else Vector3.ZERO
-	var turning := stick > 0.05 and chasing_ball(ball) and requested.dot(chase_direction) < 0.75
+	var turn_angle := absf(_incoming_turn_angle(ball_velocity, requested))
+	var has_chase := chasing_ball(ball)
+	var steering := has_chase and stick > 0.05 and turn_angle >= STEER_ONSET_ANGLE and turn_angle <= STEER_MAX_REQUEST + 0.0001
+	var reversing := has_chase and stick > 0.05 and turn_angle > STEER_MAX_REQUEST + 0.0001
+	var turning := steering or reversing
 	var stopping := stick < 0.05
-	if chasing_ball(ball) and not turning and not stopping:
+	# A reachable steering swing can prepare near the end of free chase. The
+	# actual contact below still waits for the previous touch cooldown to end.
+	if touch_cooldown > 0 and (not steering or touch_cooldown > STEER_PREPARE_LEAD):
+		return false
+	if has_chase and not turning and not stopping:
 		var closing_speed := (ball_velocity - player_velocity).dot(relative.normalized())
 		var caught_up := relative.length() < 0.52 or (closing_speed < -0.12 and relative.length() <= chase_peak_gap - 0.12)
 		if not caught_up:
@@ -469,7 +491,8 @@ func dribble(ball: FootballBall) -> bool:
 	dribble_active = true
 	dribble_is_receive = false
 	dribble_foot_right = foot_right
-	dribble_trap = turning or stopping
+	dribble_trap = reversing or stopping
+	dribble_steer = steering
 	dribble_phase = "prepare"
 	dribble_elapsed = 0
 	dribble_duration = contact_delay + 0.10
@@ -530,6 +553,7 @@ func receive(ball: FootballBall) -> bool:
 	dribble_active = true
 	dribble_foot_right = foot_right
 	dribble_trap = true
+	dribble_steer = false
 	dribble_phase = "prepare"
 	dribble_elapsed = 0
 	dribble_contact_time = delay
@@ -561,13 +585,15 @@ func _update_dribble_contact() -> void:
 	if not dribble_has_hit and dribble_elapsed >= dribble_contact_time - 0.008 and dribble_elapsed <= dribble_contact_time + 0.055:
 		var contact_gap := _moving_boot_distance(last_dribble_ball_world, dribble_ball.global_position, last_boot_world, boot_world)
 		last_control_boot_gap = contact_gap if last_control_boot_gap < 0 else minf(last_control_boot_gap, contact_gap)
-		var eligible := _can_receive(dribble_ball) if dribble_is_receive else can_control(dribble_ball)
+		var eligible := _can_receive(dribble_ball) if dribble_is_receive else (touch_cooldown <= 0 and can_control(dribble_ball))
 		var assigned_receive := dribble_is_receive and eligible
 		if (dribble_ball.control_candidate_id == player_id or assigned_receive) and eligible and contact_gap < BOOT_TOUCH_REACH:
 			if dribble_is_receive:
 				_cushion_receive(contact_gap)
 			else:
 				_apply_dribble_touch(contact_gap)
+		elif touch_cooldown > 0 and not dribble_is_receive:
+			last_control_reason = "waiting_for_touch_cooldown"
 		elif not eligible:
 			last_control_reason = "receive_no_longer_eligible" if dribble_is_receive else "control_no_longer_eligible"
 		elif dribble_ball.control_candidate_id != player_id and not assigned_receive:
@@ -590,29 +616,50 @@ func _apply_dribble_touch(contact_gap: float) -> void:
 	var direction := intent.normalized() if stick > 0.05 else Vector3.ZERO
 	if jockey and shield_direction.length_squared() > 0.1:
 		direction = shield_direction
-	dribble_trap = dribble_trap or stick <= 0.05 or (chasing_ball(dribble_ball) and direction.dot(chase_direction) < 0.75)
 	var fast := sprint and energy > 0.05 and stick > 0.1
 	var incoming := dribble_ball.linear_velocity
 	var incoming_flat := _flat(incoming)
+	var signed_turn := _incoming_turn_angle(incoming_flat, direction)
+	var turn_angle := absf(signed_turn)
+	var has_chase := chasing_ball(dribble_ball)
+	# Classify again at the real contact. A changed stick must not inherit an
+	# earlier trap or steering decision while the ball was still travelling.
+	dribble_steer = has_chase and stick > 0.05 and turn_angle >= STEER_ONSET_ANGLE and turn_angle <= STEER_MAX_REQUEST + 0.0001
+	dribble_trap = stick <= 0.05 or (has_chase and turn_angle > STEER_MAX_REQUEST + 0.0001)
 	var target_velocity := Vector3.ZERO
+	var planned_rotation := 0.0
 	if stick > 0.05:
 		var base_speed := pace if fast else pace * 0.66
 		var lead_speed := (1.8 if fast else 1.3) * stick
 		var forward_speed := maxf(0, velocity.dot(direction))
 		var push_speed := minf(base_speed * stick + lead_speed, maxf(0.9 * stick, forward_speed) + lead_speed)
-		if dribble_trap:
+		if dribble_steer:
+			# Redirect the incoming roll with a small sideways nudge. Preserve
+			# its speed and only add enough forward lead to leave the boot again;
+			# never target a position or spend the whole touch braking to 2.2m/s.
+			planned_rotation = clampf(signed_turn, -STEER_MAX_ROTATION, STEER_MAX_ROTATION)
+			var steering_direction := incoming_flat.normalized().rotated(Vector3.UP, planned_rotation)
+			var modest_lead := minf(base_speed * stick + lead_speed, velocity.length() + 0.45 * stick)
+			var steering_speed := maxf(incoming_flat.length(), modest_lead)
+			target_velocity = steering_direction * steering_speed
+		elif dribble_trap:
 			# A turn is a first touch into the new direction, not a full-speed
 			# reversal. The finite impulse may leave incoming momentum to chase.
 			push_speed = minf(push_speed, 1.2 + stick)
-		target_velocity = direction * push_speed
+			target_velocity = direction * push_speed
+		else:
+			target_velocity = direction * push_speed
 	var impulse := ((target_velocity - incoming_flat) * dribble_ball.mass).limit_length(1.7 * touch_skill)
+	var predicted_after := incoming + impulse / dribble_ball.mass
+	var turn_angle_after := absf(_incoming_turn_angle(predicted_after, direction))
+	var actual_rotation := _incoming_turn_angle(incoming_flat, _flat(predicted_after))
 	dribble_ball.touch(team, player_id, impulse)
 	preferred_touch_foot_right = not dribble_foot_right
-	dribble_follow_direction = direction if direction.length_squared() > 0.01 else (-incoming_flat).normalized()
+	dribble_follow_direction = impulse.normalized() if dribble_steer and impulse.length_squared() > 0.0001 else (direction if direction.length_squared() > 0.01 else (-incoming_flat).normalized())
 	var free_seconds := 0.20 if fast else 0.16
 	touch_cooldown = free_seconds
 	if stick > 0.05:
-		_remember_free_ball(dribble_ball, direction)
+		_remember_free_ball(dribble_ball, _flat(predicted_after).normalized() if dribble_steer else direction)
 	else:
 		chase_remaining = 0
 		stop_stride_remaining = 0
@@ -621,7 +668,7 @@ func _apply_dribble_touch(contact_gap: float) -> void:
 	close_control_ball = dribble_ball
 	close_control_remaining = TOUCH_STRIDE_TIME
 	_finish_control_contact(contact_gap, "dribble_contact")
-	physical_event.emit("dribble_touch", {"foot": "right" if dribble_foot_right else "left", "direction": _vector(direction), "impulse": _vector(impulse), "ball_velocity_before": _vector(incoming), "predicted_velocity_after": _vector(incoming + impulse / dribble_ball.mass), "player_velocity": _vector(velocity), "touch_serial": dribble_ball.touch_serial, "phase": dribble_phase, "kind": "trap" if dribble_trap else "push", "trap": dribble_trap, "contact_gap": contact_gap, "minimum_free_chase_seconds": free_seconds})
+	physical_event.emit("dribble_touch", {"foot": "right" if dribble_foot_right else "left", "direction": _vector(direction), "impulse": _vector(impulse), "ball_velocity_before": _vector(incoming), "predicted_velocity_after": _vector(predicted_after), "player_velocity": _vector(velocity), "touch_serial": dribble_ball.touch_serial, "phase": dribble_phase, "kind": "trap" if dribble_trap else "push", "trap": dribble_trap, "steer": dribble_steer, "turn_angle_before_deg": rad_to_deg(turn_angle), "turn_angle_after_deg": rad_to_deg(turn_angle_after), "turn_aim": _vector(direction), "steering_rotation_deg": rad_to_deg(actual_rotation), "planned_steering_rotation_deg": rad_to_deg(planned_rotation), "contact_gap": contact_gap, "minimum_free_chase_seconds": free_seconds})
 
 func _remember_free_ball(ball: FootballBall, direction: Vector3) -> void:
 	chase_ball = ball
@@ -648,6 +695,8 @@ func _cushion_receive(contact_gap: float) -> void:
 	var receiver := dribble_ball.pass_receiver_id
 	var incoming_serial := dribble_ball.touch_serial
 	dribble_ball.touch(team, player_id, impulse)
+	last_received_from = passer
+	last_received_frame = Engine.get_physics_frames()
 	apply_central_impulse(-impulse)
 	receiving_active = false
 	completed_receive_contacts += 1
@@ -736,6 +785,7 @@ func _update_challenge() -> void:
 					var impulse := ((target - incoming * 0.85) * action_ball.mass).limit_length(MAX_KICK_IMPULSE)
 					action_ball.touch(team, player_id, impulse, Vector3(0, -FootballBall.RADIUS * 0.35, 0))
 					if kick_kind in ["pass", "through", "lob"]:
+						last_delivery_frame = Engine.get_physics_frames()
 						action_ball.passer_block_id = player_id
 						action_ball.passer_block_remaining = 0.3
 					else:
@@ -848,12 +898,16 @@ func reset_action() -> void:
 	dribble_is_receive = false
 	last_receive_contact_frame = -1000
 	pending_receiver_id = ""
+	last_received_from = ""
+	last_received_frame = -100000
+	last_delivery_frame = -100000
 	last_control_reason = "reset"
 	last_control_boot_gap = -1
 	last_control_reach_gap = -1
 	last_control_contact_frame = -1
 	dribble_phase = "idle"
 	dribble_trap = false
+	dribble_steer = false
 	chase_ball = null
 	chase_remaining = 0
 	chase_touch_serial = -1
