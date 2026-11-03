@@ -5,6 +5,7 @@ signal match_finished
 const DURATION := 180.0
 const SHOT_BUFFER_SECONDS := 0.18
 const PASS_CALL_SECONDS := 1.8
+const TEAM_PRESS_RANGE := 12.0
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -30,6 +31,7 @@ var squad := FootballSquad.new()
 var controlled: FootballPlayer
 var called_runner: FootballPlayer
 var pass_call_remaining := 0.0
+var pressure_teammate: FootballPlayer
 var selected_index: int = 0
 var scores: Array[int] = [0, 0]
 var remaining: float = DURATION
@@ -174,7 +176,7 @@ func _install_input() -> void:
 		var setup_button := InputEventJoypadButton.new()
 		setup_button.button_index = JOY_BUTTON_Y
 		InputMap.action_add_event("match_setup", setup_button)
-		for binding: Array in [["finesse_modifier", KEY_R, JOY_BUTTON_RIGHT_SHOULDER], ["chip_modifier", KEY_F, JOY_BUTTON_LEFT_SHOULDER], ["send_run", KEY_G, JOY_BUTTON_DPAD_UP]]:
+		for binding: Array in [["finesse_modifier", KEY_R, JOY_BUTTON_RIGHT_SHOULDER], ["chip_modifier", KEY_F, JOY_BUTTON_LEFT_SHOULDER], ["send_run", KEY_G, JOY_BUTTON_DPAD_UP], ["teammate_press", KEY_T, JOY_BUTTON_DPAD_DOWN]]:
 			var name_key: String = binding[0]
 			if not InputMap.has_action(name_key):
 				InputMap.add_action(name_key)
@@ -349,6 +351,7 @@ func _outfield_count() -> int:
 
 func reset_positions(kickoff_team: int) -> void:
 	shot_buffer_remaining = 0.0
+	_set_pressure_teammate(null)
 	pass_call_remaining = 0.0
 	throw_entry_time = 0.0
 	kickoff_taker = null
@@ -523,6 +526,7 @@ func _physics_process(delta: float) -> void:
 		controller_actions["finesse_modifier"] = Input.is_action_pressed("finesse_modifier")
 		controller_actions["chip_modifier"] = Input.is_action_pressed("chip_modifier")
 		controller_actions["send_run"] = Input.is_action_just_pressed("send_run")
+		controller_actions["teammate_press"] = Input.is_action_pressed("teammate_press")
 	if decision_driver != null:
 		controller_actions = decision_driver.actions
 	_controller_actions(delta, controller_actions)
@@ -539,7 +543,7 @@ func _physics_process(delta: float) -> void:
 		if player != controlled:
 			var difficulty := opponent_difficulty if player.team == 1 else 1
 			var called_receiver := controlled if pass_call_remaining > 0.0 and player.team == controlled.team else null
-			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty, called_receiver)
+			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty, called_receiver, pressure_teammate)
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
@@ -622,7 +626,49 @@ func _request_delivery(kind: String, strength: float, lift: float) -> void:
 		if not preferred.is_empty() and controlled.pending_receiver_id == preferred:
 			_record("run_through_requested", controlled, {"receiver": preferred})
 
+func _available_presser(player: FootballPlayer) -> bool:
+	return player != controlled and player.ragdoll == null and not player.hop_active and player.recovery_remaining <= 0.0 and player.energy > 0.15 and FootballReception.flat(player.global_position - ball.global_position).length_squared() < TEAM_PRESS_RANGE * TEAM_PRESS_RANGE
+
+func _set_pressure_teammate(player: FootballPlayer) -> void:
+	if pressure_teammate == player:
+		return
+	for teammate in home_outfield:
+		teammate.reaction_timer = 0.0
+	if pressure_teammate != null:
+		_record("pressure_ended", pressure_teammate)
+	pressure_teammate = player
+	if player != null:
+		_record("pressure_started", player)
+		hud.flash(player.player_name.to_upper() + " PRESSES", 0.85)
+
+func _update_team_pressure(held: bool) -> void:
+	if not held or ball.last_touch_team != 1 or not ball.grip_holder_id.is_empty():
+		_set_pressure_teammate(null)
+		return
+	var opponent_has_ball := false
+	for opponent in away_outfield:
+		if opponent.controlling_ball() or opponent.chasing_ball(ball):
+			opponent_has_ball = true
+			break
+	if not opponent_has_ball:
+		_set_pressure_teammate(null)
+		return
+	if pressure_teammate != null and _available_presser(pressure_teammate):
+		return
+	var closest: FootballPlayer = null
+	var closest_distance := INF
+	for teammate in home_outfield:
+		if not _available_presser(teammate):
+			continue
+		var distance := FootballReception.flat(teammate.global_position - ball.global_position).length_squared()
+		if distance < closest_distance:
+			closest_distance = distance
+			closest = teammate
+	_set_pressure_teammate(closest)
+
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
+	if eleven_a_side:
+		_update_team_pressure(bool(pressed.get("teammate_press", false)))
 	if pressed.get("hop", false) and not _can_modify_shot() and not (eleven_a_side and pressed.get("primary", false) and pressed.get("finesse_modifier", false)):
 		controlled.hop()
 	if controlled.ragdoll != null or controlled.hop_active:
@@ -796,6 +842,7 @@ func throw_entering_pitch() -> bool:
 	return throw_entry_time > 0.0 and point.z * throw_entry_side > ElevenPitch.HALF_WIDTH - FootballBall.RADIUS and ball.linear_velocity.z * throw_entry_side < 0.0 and absf(point.x) <= ElevenPitch.HALF_LENGTH + FootballBall.RADIUS
 
 func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
+	_set_pressure_teammate(null)
 	throw_entry_time = 0.0
 	shot_buffer_remaining = 0.0
 	pass_call_remaining = 0.0
@@ -1002,7 +1049,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						_pause_node(body)
 			ball.freeze = true
 			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
-			var runs := "\nD-pad up / G: send a teammate on a run. Cross / Space off the ball: ask for a pass." if eleven_a_side else ""
+			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right." + runs, "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"

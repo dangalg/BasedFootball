@@ -12,7 +12,7 @@ const ELEVEN_MAX_PASS_DISTANCE := 21.0
 
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
-static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1, called_receiver: FootballPlayer = null) -> String:
+static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1, called_receiver: FootballPlayer = null, pressure_teammate: FootballPlayer = null) -> String:
 	if player.is_goalkeeper:
 		return ""
 	if player.ragdoll != null or player.hop_active:
@@ -133,6 +133,11 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 				teammate_holder = other
 				nearest = other
 				break
+	elif eleven and opponent_carrier != null and pressure_teammate != null \
+			and pressure_teammate.team == player.team and not pressure_teammate.selected \
+			and not pressure_teammate.is_goalkeeper and pressure_teammate.upright_ready() \
+			and not (ball.pass_active and ball.pass_team == player.team):
+		nearest = pressure_teammate
 	var target := ball.global_position
 	if eleven and nearest != player:
 		var attacking := teammate_holder != null or (ball.pass_active and ball.pass_team == player.team)
