@@ -20,6 +20,9 @@ var _sole_planting := false
 var _sole_plant_basis := Basis.IDENTITY
 var head_pivot: Node3D
 var _celebration_start: Array[Quaternion] = []
+var _tactical_marker: MeshInstance3D
+var _tactical_kind := ""
+static var _tactical_meshes: Dictionary = {}
 
 func build(player: Node3D) -> void:
 	player.body_visual = Node3D.new()
@@ -242,6 +245,54 @@ func animate(player: Node3D, delta: float) -> void:
 	_sole_planting = sole_stopping
 	if player.throw_in_phase >= 0.0:
 		_pose_throw_in(player, player.throw_in_phase)
+
+
+func set_tactical_marker(player: Node3D, marker: String) -> void:
+	if marker == _tactical_kind:
+		return
+	_tactical_kind = marker
+	if marker != "run" and marker != "receive":
+		if _tactical_marker != null:
+			_tactical_marker.hide()
+		return
+	if _tactical_marker == null:
+		_tactical_marker = MeshInstance3D.new()
+		_tactical_marker.name = "TacticalMarker"
+		_tactical_marker.position.y = player.ring.position.y + 0.015
+		_tactical_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		player.add_child(_tactical_marker)
+	_tactical_marker.mesh = _tactical_mesh(marker)
+	_tactical_marker.show()
+
+
+static func _tactical_mesh(marker: String) -> ImmediateMesh:
+	if _tactical_meshes.has(marker):
+		return _tactical_meshes[marker] as ImmediateMesh
+	var run := marker == "run"
+	var material := FootballArt.marker(Color("8be8ff") if run else Color("d6f58c"))
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES, material)
+	for side: float in [-1.0, 1.0]:
+		if run:
+			var tip := Vector2(side * 1.08, 0.0)
+			_tactical_stroke(mesh, Vector2(side * 0.82, -0.36), tip)
+			_tactical_stroke(mesh, tip, Vector2(side * 0.82, 0.36))
+		else:
+			for end: float in [-1.0, 1.0]:
+				var corner := Vector2(side * 0.80, end * 0.80)
+				_tactical_stroke(mesh, Vector2(side * 0.50, corner.y), corner)
+				_tactical_stroke(mesh, corner, Vector2(corner.x, end * 0.50))
+	mesh.surface_end()
+	_tactical_meshes[marker] = mesh
+	return mesh
+
+
+static func _tactical_stroke(mesh: ImmediateMesh, start: Vector2, finish: Vector2) -> void:
+	var along := (finish - start).normalized()
+	var width := Vector2(-along.y, along.x) * 0.105
+	for point: Vector2 in [start - width, start + width, finish + width, start - width, finish + width, finish - width]:
+		mesh.surface_add_vertex(Vector3(point.x, 0.0, point.y))
 
 
 func pose_celebration(_player: Node3D, elapsed: float) -> void:

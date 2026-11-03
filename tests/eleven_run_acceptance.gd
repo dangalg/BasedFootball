@@ -2,6 +2,7 @@ extends SceneTree
 
 ## --headless --script res://tests/eleven_run_acceptance.gd
 ## -- --eleven-acceptance --report=<fresh absolute JSON path>
+## --marker-movie adds lead-in and post-pass time for off-screen capture.
 
 const MATCH := preload("res://scenes/eleven_match.tscn")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
@@ -29,7 +30,7 @@ func _run() -> void:
 		push_error("Expected the isolated eleven-a-side match without the setup menu.")
 		quit(2)
 		return
-	var report := await _exercise(game)
+	var report := await _exercise(game, "--marker-movie" in arguments)
 	if FileAccess.file_exists(report_path):
 		push_error("Report already exists at %s" % report_path)
 		quit(2)
@@ -45,7 +46,7 @@ func _run() -> void:
 	quit(0 if report["passed"] else 1)
 
 
-func _exercise(game: Node3D) -> Dictionary:
+func _exercise(game: Node3D, marker_movie: bool) -> Dictionary:
 	var carrier: FootballPlayer = game.controlled
 	var runner: FootballPlayer = game.home_outfield[1]
 	var ball: FootballBall = game.ball
@@ -66,7 +67,8 @@ func _exercise(game: Node3D) -> Dictionary:
 	runner.reset_physics_interpolation()
 	ball.global_position = Vector3(0.53, FootballBall.RADIUS, 0.0)
 	ball.reset_physics_interpolation()
-	for _frame in range(ceili(0.23 * hz)):
+	var settle_seconds := 0.50 if marker_movie else 0.23
+	for _frame in range(ceili(settle_seconds * hz)):
 		await physics_frame
 	# A preceding touch supplies the live chase record. It is excluded from all pass checks.
 	ball.touch(carrier.team, carrier.player_id, FORWARD * ball.mass * 0.025)
@@ -79,21 +81,26 @@ func _exercise(game: Node3D) -> Dictionary:
 	game._controller_actions(delta, {"send_run": true})
 	var called_target: Vector3 = runner.called_run_target
 	var called_duration: float = runner.called_run_remaining
+	var run_marker_frame := -1
 	for _frame in range(ceili(0.46 * hz)):
 		await physics_frame
+		if run_marker_frame < 0 and _visible_marker(runner) == "run":
+			run_marker_frame = Engine.get_physics_frames()
 	var advance := (runner.global_position - runner_start).dot(FORWARD)
 	var aim := runner.global_position - carrier.global_position
 	aim.y = 0.0
 	carrier.aim = aim.normalized()
 	game._controller_actions(delta, {"through": true})
 	var samples: Array[Dictionary] = []
-	for _frame in range(ceili(0.65 * hz)):
+	var follow_seconds := 1.20 if marker_movie else 0.65
+	for _frame in range(ceili(follow_seconds * hz)):
 		await physics_frame
 		samples.append({
 			"frame": Engine.get_physics_frames(), "touch_serial": ball.touch_serial,
 			"ball_position": _vector(ball.global_position), "ball_velocity": _vector(ball.linear_velocity),
 			"free": not ball.freeze and ball.grip_holder_id.is_empty(),
 			"runner_position": _vector(runner.global_position), "receiver": ball.pass_receiver_id,
+			"runner_marker": _visible_marker(runner),
 		})
 	var events: Array = game.action_log.slice(first_event)
 	var run_called := _event(events, "run_called", runner.player_id)
@@ -109,12 +116,15 @@ func _exercise(game: Node3D) -> Dictionary:
 	var gap := float(contact.get("boot_gap", INF))
 	var measured_speed := 0.0
 	var free_flight := true
+	var receive_marker_frame := -1
 	for sample in samples:
 		if sample["touch_serial"] != serial:
 			continue
 		var velocity := _read_vector(sample["ball_velocity"])
 		free_flight = free_flight and sample["free"] and velocity.is_finite()
 		measured_speed = maxf(measured_speed, velocity.dot(FORWARD))
+		if receive_marker_frame < 0 and sample["receiver"] == runner.player_id and sample["runner_marker"] == "receive":
+			receive_marker_frame = int(sample["frame"])
 	var checks := {
 		"fixture_carrier_was_chasing": had_live_chase,
 		"run_called_for_aimed_teammate": not run_called.is_empty() and called_duration > 0.0 and called_target.x > runner_start.x,
@@ -123,6 +133,7 @@ func _exercise(game: Node3D) -> Dictionary:
 		"carrier_made_through_boot_contact": contact.get("detail_kind", "") == "through" and gap >= 0.0 and gap <= FootballPlayer.STRIKE_BOOT_REACH and serial > seed_serial and not pass_impulse.is_empty(),
 		"runner_assigned_to_same_pass": receiver.get("serial", -1) == serial and receiver.get("passer", "") == carrier.player_id and serial > seed_serial,
 		"observed_forward_free_ball": free_flight and measured_speed >= 4.0,
+		"marker_changed_from_run_to_receive": run_marker_frame >= 0 and receive_marker_frame > run_marker_frame,
 	}
 	return {
 		"passed": not checks.values().has(false), "checks": checks,
@@ -130,8 +141,14 @@ func _exercise(game: Node3D) -> Dictionary:
 		"carrier": carrier.player_id, "runner": runner.player_id, "seed_serial": seed_serial,
 		"runner_start": _vector(runner_start), "called_target": _vector(called_target),
 		"advance_before_pass_m": advance, "observed_pass_forward_speed_mps": measured_speed,
+		"marker_movie": marker_movie, "run_marker_frame": run_marker_frame, "receive_marker_frame": receive_marker_frame,
 		"samples": samples, "match_action_log": events, "impulse_audit": ball.impulse_audit.duplicate(true),
 	}
+
+
+func _visible_marker(player: FootballPlayer) -> String:
+	var visual := player.visual_controller
+	return visual._tactical_kind if visual._tactical_marker != null and visual._tactical_marker.visible else ""
 
 
 func _event(events: Array, kind: String, player_id: String) -> Dictionary:

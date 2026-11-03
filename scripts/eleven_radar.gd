@@ -6,12 +6,16 @@ const UPDATE_INTERVAL_MS: int = 50
 const HOME_COLOR := Color("5bc6fc")
 const AWAY_COLOR := Color("ff9369")
 const SELECTED_COLOR := Color("ffe087")
+const RUN_COLOR := Color("8be8ff")
+const RECEIVE_COLOR := Color("d6f58c")
 const PITCH_LINE := Color(0.76, 0.88, 0.77, 0.62)
 
 var _home := PackedVector2Array()
 var _away := PackedVector2Array()
 var _ball_position := Vector2.ZERO
 var _controlled_position := Vector2.ZERO
+var _runner_position := Vector2.INF
+var _receiver_position := Vector2.INF
 var _has_ball: bool = false
 var _has_controlled: bool = false
 var _controlled_id: int = 0
@@ -24,7 +28,7 @@ func _ready() -> void:
 	resized.connect(queue_redraw)
 
 
-func update_positions(players: Array, ball: Node3D, controlled: Node3D) -> void:
+func update_positions(players: Array, ball: Node3D, controlled: Node3D, runner_id: String, receiving_id: String) -> void:
 	var now := Time.get_ticks_msec()
 	var controlled_id: int = controlled.get_instance_id() if is_instance_valid(controlled) else 0
 	if now < _next_update_ms and controlled_id == _controlled_id:
@@ -33,15 +37,21 @@ func update_positions(players: Array, ball: Node3D, controlled: Node3D) -> void:
 	_controlled_id = controlled_id
 	_home.clear()
 	_away.clear()
+	_runner_position = Vector2.INF
+	_receiver_position = Vector2.INF
 	for entry in players:
 		if not is_instance_valid(entry):
 			continue
-		var player := entry as Node3D
+		var player := entry as FootballPlayer
 		if player == null or not player.is_inside_tree():
 			continue
 		var position_on_pitch := _normalize(player.global_position)
-		if int(player.get("team")) == 0:
+		if player.team == 0:
 			_home.append(position_on_pitch)
+			if player.player_id == runner_id:
+				_runner_position = position_on_pitch
+			elif player.player_id == receiving_id:
+				_receiver_position = position_on_pitch
 		else:
 			_away.append(position_on_pitch)
 	_has_ball = is_instance_valid(ball) and ball.is_inside_tree()
@@ -73,6 +83,13 @@ func _draw() -> void:
 	_draw_team(field, _away, AWAY_COLOR)
 	if _has_controlled:
 		draw_arc(field.position + _controlled_position * field.size, 6.0, 0.0, TAU, 24, SELECTED_COLOR, 1.7, true)
+	if _runner_position.is_finite():
+		var point := field.position + _runner_position * field.size
+		draw_line(point + Vector2(-6.0, -4.0), point + Vector2(-6.0, 4.0), RUN_COLOR, 1.7, true)
+		draw_line(point + Vector2(6.0, -4.0), point + Vector2(6.0, 4.0), RUN_COLOR, 1.7, true)
+	if _receiver_position.is_finite():
+		var point := field.position + _receiver_position * field.size
+		draw_rect(Rect2(point - Vector2(6.0, 6.0), Vector2(12.0, 12.0)), RECEIVE_COLOR, false, 1.6)
 	if _has_ball:
 		var point := field.position + _ball_position * field.size
 		draw_circle(point, 3.6, Color("18232a"))

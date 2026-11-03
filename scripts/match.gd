@@ -1249,8 +1249,20 @@ func _process(delta: float) -> void:
 	aim_line.rotation.y = atan2(strike_direction.x, strike_direction.z)
 	aim_line.visible = phase == "playing"
 	hud.update_match(scores, remaining, controlled, charge, (2 if ends_swapped else 1) if eleven_a_side else 0)
-	if hud.radar != null:
-		hud.radar.update_positions(players, ball, controlled)
+	if eleven_a_side:
+		var live := phase == "playing" and restart.is_empty() and kickoff_remaining <= 0.0 and not is_instance_valid(kickoff_taker)
+		var receiving_id := ball.pass_receiver_id if live and ball.pass_active and ball.pass_team == 0 else ""
+		var runner_id := ""
+		for player in home_outfield:
+			var marker := ""
+			if player.player_id == receiving_id:
+				marker = "receive"
+			elif live and player == called_runner and player.called_run_remaining > 0.0:
+				marker = "run"
+				runner_id = player.player_id
+			player.visual_controller.set_tactical_marker(player, marker)
+		if hud.radar != null:
+			hud.radar.update_positions(players, ball, controlled, runner_id, receiving_id)
 	var devices := Input.get_connected_joypads()
 	hud.status.text = "DECISION PLAYTEST / HARDWARE INPUT DISABLED" if decision_driver != null else ("CONTROLLER CONNECTED" if not devices.is_empty() else "KEYBOARD READY  /  CONNECT A CONTROLLER ANYTIME")
 	if eleven_a_side and charging:
