@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "players": [
+    {"id":"ari","name":"ARI","opponent":"FINN","number":9,"role":"Striker","mass":74,"pace":6.7,"touch":0.96,"stamina":1,"balance":1,"agility":1.05},
+    {"id":"nia","name":"NIA","opponent":"RAE","number":11,"role":"Left winger","mass":69,"pace":7,"touch":0.91,"stamina":1,"balance":0.94,"agility":1.12},
+    {"id":"kai","name":"KAI","opponent":"MAX","number":7,"role":"Right winger","mass":70,"pace":7,"touch":0.91,"stamina":1,"balance":0.94,"agility":1.12},
+    {"id":"noa","name":"NOA","opponent":"ELI","number":10,"role":"Left midfield","mass":75,"pace":6.6,"touch":1,"stamina":1.05,"balance":1,"agility":1.05},
+    {"id":"jo","name":"JO","opponent":"RUI","number":8,"role":"Right midfield","mass":73,"pace":6.6,"touch":0.97,"stamina":1.08,"balance":1,"agility":1.05},
+    {"id":"sam","name":"SAM","opponent":"IVAN","number":6,"role":"Holding midfield","mass":79,"pace":6.2,"touch":0.91,"stamina":1.08,"balance":1.08,"agility":0.99},
+    {"id":"leo","name":"LEO","opponent":"MICA","number":3,"role":"Left back","mass":74,"pace":6.7,"touch":0.86,"stamina":1.1,"balance":1.02,"agility":1.03},
+    {"id":"ben","name":"BEN","opponent":"LUC","number":4,"role":"Left centre back","mass":82,"pace":6.2,"touch":0.86,"stamina":1.05,"balance":1.13,"agility":0.96},
+    {"id":"tal","name":"TAL","opponent":"OMAR","number":5,"role":"Right centre back","mass":81,"pace":6.2,"touch":0.86,"stamina":1.05,"balance":1.13,"agility":0.96},
+    {"id":"sol","name":"SOL","opponent":"EZRA","number":2,"role":"Right back","mass":74,"pace":6.7,"touch":0.86,"stamina":1.1,"balance":1.02,"agility":1.03},
+    {"id":"keeper","name":"DAN","opponent":"LEE","number":1,"role":"Keeper","mass":80,"pace":5.8,"touch":0.9,"stamina":1,"balance":1.1,"agility":1}
+  ]
+}

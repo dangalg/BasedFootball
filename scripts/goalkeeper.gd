@@ -33,6 +33,7 @@ var observed_ball: FootballBall
 var release_receiver_id: String = ""
 var release_direction := Vector3.ZERO
 var release_kind: String = "throw"
+var full_pitch := false
 
 func _init() -> void:
 	is_goalkeeper = true
@@ -58,6 +59,8 @@ func _own_side() -> float:
 
 func area_contains(point: Vector3) -> bool:
 	var depth := point.x * _own_side()
+	if full_pitch:
+		return depth >= 33.5 and depth <= 50.0 and absf(point.z) <= 20.16
 	return depth >= AREA_NEAR and depth <= AREA_FAR and absf(point.z) <= AREA_HALF_WIDTH
 
 func hand_positions() -> Array[Vector3]:
@@ -83,25 +86,30 @@ func decide_keeper(all_players: Array[FootballPlayer], ball: FootballBall, delta
 	facing.y = 0
 	aim = facing.normalized() if facing.length_squared() > 0.02 else forward
 	jockey = false
-	var target := Vector3(side * 16.6, 0, clampf(ball.global_position.z * 0.18, -1.5, 1.5))
+	var line := 50.0 if full_pitch else 18.0
+	var mouth := 3.66 if full_pitch else 2.3
+	var target := Vector3(side * (line - 1.4), 0, clampf(ball.global_position.z * 0.18, -mouth * 0.65, mouth * 0.65))
 	var toward_goal := ball.linear_velocity.x * side > 0.3
 	var arrival := INF
 	var threatens := false
 	if toward_goal:
-		arrival = (side * 18.0 - ball.global_position.x) / ball.linear_velocity.x
+		arrival = (side * line - ball.global_position.x) / ball.linear_velocity.x
 		if arrival > 0 and arrival < 1.5:
 			var impact_z := ball.global_position.z + ball.linear_velocity.z * arrival
 			var impact_y := ball.global_position.y + ball.linear_velocity.y * arrival - 4.9 * arrival * arrival
-			threatens = absf(impact_z) < 3.0 and impact_y < 2.65
+			threatens = absf(impact_z) < mouth + 0.5 and impact_y < 2.65
 			if threatens:
-				target.z = clampf(impact_z, -2.05, 2.05)
+				target.z = clampf(impact_z, -mouth + 0.25, mouth - 0.25)
 	var distance := global_position.distance_to(ball.global_position)
 	if area_contains(ball.global_position) and distance < 3.2 and ball.grip_holder_id.is_empty():
 		target = ball.global_position + ball.linear_velocity * minf(0.18, distance / 10.0) - forward * 0.45
 	if not area_contains(global_position):
-		target = Vector3(side * 16.5, 0, clampf(global_position.z, -2.2, 2.2))
-	target.x = side * clampf(target.x * side, AREA_NEAR + 0.25, AREA_FAR - 0.45)
-	target.z = clampf(target.z, -AREA_HALF_WIDTH + 0.3, AREA_HALF_WIDTH - 0.3)
+		target = Vector3(side * (line - 1.5), 0, clampf(global_position.z, -mouth, mouth))
+	var near_edge := 33.5 if full_pitch else AREA_NEAR
+	var far_edge := 50.0 if full_pitch else AREA_FAR
+	var area_width := 20.16 if full_pitch else AREA_HALF_WIDTH
+	target.x = side * clampf(target.x * side, near_edge + 0.25, far_edge - 0.45)
+	target.z = clampf(target.z, -area_width + 0.3, area_width - 0.3)
 	var offset := target - global_position
 	offset.y = 0
 	intent = offset.normalized() * clampf(offset.length() * 1.2, 0, 1) if offset.length() > 0.15 else Vector3.ZERO

@@ -2,10 +2,10 @@
 config_version=5
 
 [application]
-config/name="Based Football - 4v4 Keeper Preview"
+config/name="Based Football - 11v11"
 config/use_custom_user_dir=true
-config/custom_user_dir_name="BasedFootball-KeeperPreview"
-run/main_scene="res://scenes/match.tscn"
+config/custom_user_dir_name="BasedFootball-Rebuild"
+run/main_scene="res://scenes/eleven_match.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 
 [display]

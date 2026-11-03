@@ -3,6 +3,8 @@ extends RefCounted
 
 const CONTROL_HIP_OFFSET := -0.20
 const HIP_RESPONSE := 12.0
+const UPPER_ARM_LENGTH := 0.27
+const HAND_LOCAL_CENTER := Vector3(0.0, -0.26, 0.0)
 
 var left_knee: Node3D
 var right_knee: Node3D
@@ -13,6 +15,9 @@ var right_elbow: Node3D
 var upper_body: Node3D
 var right_boot: Node3D
 var left_boot: Node3D
+const SOLE_LOCAL_CENTER := Vector3(0.0, -0.052, -0.055)
+var _sole_planting := false
+var _sole_plant_basis := Basis.IDENTITY
 var head_pivot: Node3D
 
 func build(player: Node3D) -> void:
@@ -64,9 +69,9 @@ func build(player: Node3D) -> void:
 		var elbow := Node3D.new()
 		elbow.name = "LeftElbow" if side < 0 else "RightElbow"
 		arm.add_child(elbow)
-		elbow.position.y = -0.27
+		elbow.position.y = -UPPER_ARM_LENGTH
 		FootballArt.capsule(elbow, 0.045, 0.25, Vector3(0, -0.12, 0), skin)
-		FootballArt.sphere(elbow, 0.055, Vector3(0, -0.26, 0), skin).scale = Vector3(0.7, 1, 0.75)
+		FootballArt.sphere(elbow, 0.055, HAND_LOCAL_CENTER, skin).scale = Vector3(0.7, 1, 0.75)
 		var leg := Node3D.new()
 		leg.name = "LeftLeg" if side < 0 else "RightLeg"
 		model.add_child(leg)
@@ -130,6 +135,7 @@ func animate(player: Node3D, delta: float) -> void:
 	var shoulder: bool = player.action_kind == "shoulder"
 	var kicking: bool = player.action_kind == "kick"
 	var touching: bool = player.dribble_active
+	var sole_stopping: bool = touching and player.sole_stop_active and player.action_kind == "" and not player.hop_active
 	var touch_weight := 0.0
 	if touching:
 		if not player.dribble_has_hit:
@@ -164,18 +170,18 @@ func animate(player: Node3D, delta: float) -> void:
 	right_knee.rotation = Vector3(-maxf(0, -right_swing) * 1.1, 0, 0)
 	left_boot.rotation = Vector3.ZERO
 	right_boot.rotation = Vector3.ZERO
-	left_arm.rotation.x = -0.5 if sliding else -left_swing * 0.7
-	right_arm.rotation.x = -0.5 if sliding else -right_swing * 0.7
+	left_arm.rotation = Vector3(-0.5 if sliding else -left_swing * 0.7, 0, -0.15)
+	right_arm.rotation = Vector3(-0.5 if sliding else -right_swing * 0.7, 0, 0.15)
 	# The athlete faces local -Z. Positive X flexion bends the forearms forward;
 	# a negative angle bent both elbows towards the back of the torso.
-	left_elbow.rotation.x = 0.6 + stride * 0.3
-	right_elbow.rotation.x = 0.6 + stride * 0.3
+	left_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
+	right_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
 	if kicking:
 		var support_right: bool = not player.kick_foot_right
 		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04))
 	elif standing or rising:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
-	elif touching:
+	elif touching and not sole_stopping:
 		var support_right: bool = not player.dribble_foot_right
 		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04), touch_weight)
 	if rising:
@@ -200,7 +206,7 @@ func animate(player: Node3D, delta: float) -> void:
 			var follow := smoothstep(player.kick_contact_time, player.action_duration, player.action_elapsed)
 			target = contact + player.action_direction * 0.22 * follow + Vector3.UP * 0.24 * follow
 		_pose_foot(player, player.kick_foot_right, target)
-	elif touching:
+	elif touching and not sole_stopping:
 		var swing := smoothstep(0, player.dribble_contact_time, player.dribble_elapsed)
 		var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
 		if player.dribble_has_hit:
@@ -228,6 +234,101 @@ func animate(player: Node3D, delta: float) -> void:
 		right_knee.quaternion = _limit_rotation(previous_knee_rotation, right_knee.quaternion, delta * 18)
 		player.left_leg.quaternion = _limit_rotation(previous_left_leg_rotation, player.left_leg.quaternion, delta * 18)
 		left_knee.quaternion = _limit_rotation(previous_left_knee_rotation, left_knee.quaternion, delta * 18)
+	if sole_stopping:
+		_pose_sole_stop(player, touch_weight)
+	_sole_planting = sole_stopping
+	if player.throw_in_phase >= 0.0:
+		_pose_throw_in(player, player.throw_in_phase)
+
+
+func throw_in_hand_center(_player: Node3D) -> Vector3:
+	var left_hand := left_elbow.to_global(HAND_LOCAL_CENTER)
+	var right_hand := right_elbow.to_global(HAND_LOCAL_CENTER)
+	return left_hand.lerp(right_hand, 0.5) + upper_body.global_basis.y * 0.045
+
+
+func _pose_throw_in(player: Node3D, phase: float) -> void:
+	# Move the hands around the crown before reaching forward for release.
+	var behind_head := Vector3(0.136, 0.880, 0.260)
+	var overhead := Vector3(0.136, 1.012, 0.000)
+	var release := Vector3(0.136, 0.930, -0.265)
+	var follow := Vector3(0.136, 0.700, -0.390)
+	var hand: Vector3
+	if phase < 0.43:
+		var swing := smoothstep(0.10, 0.43, phase)
+		hand = behind_head.lerp(overhead, swing)
+		hand.y += sin(swing * PI) * 0.047
+	elif phase < 0.7:
+		var swing := smoothstep(0.43, 0.7, phase)
+		hand = overhead.lerp(release, swing)
+		hand.y += sin(swing * PI) * 0.038
+	else:
+		hand = release.lerp(follow, smoothstep(0.7, 1.0, phase))
+	_pose_throw_arm(left_arm, left_elbow, Vector3(-hand.x, hand.y, hand.z), -1.0)
+	_pose_throw_arm(right_arm, right_elbow, hand, 1.0)
+	player.body_visual.position.y = minf(player.body_visual.position.y, -0.10)
+	var facing := _flat_body_basis(player)
+	var position: Vector3 = player.global_position
+	_pose_foot(player, false, position + facing * Vector3(-0.15, 0.052, 0.04))
+	_pose_foot(player, true, position + facing * Vector3(0.15, 0.052, -0.04))
+
+
+func _pose_throw_arm(arm: Node3D, elbow: Node3D, hand: Vector3, side: float) -> void:
+	var to_hand := hand - arm.position
+	var direction := to_hand.normalized()
+	var forearm_length := -HAND_LOCAL_CENTER.y
+	var reach := minf(to_hand.length(), UPPER_ARM_LENGTH + forearm_length - 0.001)
+	var along := (UPPER_ARM_LENGTH ** 2 + reach ** 2 - forearm_length ** 2) / (2.0 * reach)
+	var bend := sqrt(maxf(0.0, UPPER_ARM_LENGTH ** 2 - along ** 2))
+	var outside := Vector3(side * 0.8, 0.0, 0.6)
+	var pole := (outside - direction * outside.dot(direction)).normalized()
+	var joint := direction * along + pole * bend
+	arm.basis = _throw_arm_basis(joint)
+	elbow.basis = arm.basis.inverse() * _throw_arm_basis(direction * reach - joint)
+
+
+func _throw_arm_basis(segment: Vector3) -> Basis:
+	var up := -segment.normalized()
+	var right := (Vector3.RIGHT - up * up.x).normalized()
+	return Basis(right, up, right.cross(up))
+
+
+func sole_marker(_player: Node3D, right: bool) -> Vector3:
+	var boot := right_boot if right else left_boot
+	return boot.to_global(SOLE_LOCAL_CENTER)
+
+
+func sole_target_offset(player: Node3D) -> Vector3:
+	return _flat_body_basis(player) * SOLE_LOCAL_CENTER
+
+
+func _flat_body_basis(player: Node3D) -> Basis:
+	var forward: Vector3 = -player.body_visual.global_basis.z
+	forward.y = 0.0
+	return Basis.looking_at(forward, Vector3.UP)
+
+
+func _pose_sole_stop(player: Node3D, touch_weight: float) -> void:
+	var strike_right: bool = player.dribble_foot_right
+	var flat_basis := _flat_body_basis(player)
+	if not _sole_planting:
+		_sole_plant_basis = flat_basis
+	var elapsed: float = player.dribble_elapsed
+	var contact_time: float = player.dribble_contact_time
+	var weight := minf(touch_weight if player.dribble_has_hit else 1.0,
+		smoothstep(0.0, minf(0.025, contact_time * 0.5), elapsed))
+	var support_boot := left_boot if strike_right else right_boot
+	var strike_boot := right_boot if strike_right else left_boot
+	# Resolve the plant after gait smoothing so a settled support foot stays on its anchor.
+	_pose_foot(player, not strike_right, player.sole_support_world, weight)
+	support_boot.global_basis = support_boot.global_basis.slerp(_sole_plant_basis, weight)
+	var swing := smoothstep(0.0, contact_time, elapsed)
+	var offset: Vector3 = player.dribble_start_foot_offset.lerp(player.dribble_target_offset, swing)
+	var lift := 0.115 * sin(PI * swing)
+	if player.dribble_has_hit:
+		lift = 0.08 * (1.0 - touch_weight)
+	_pose_foot(player, strike_right, player.global_position + offset + Vector3.UP * lift, weight)
+	strike_boot.global_basis = strike_boot.global_basis.slerp(flat_basis, weight)
 
 func _limit_rotation(previous: Quaternion, target: Quaternion, max_angle: float) -> Quaternion:
 	var angle := previous.angle_to(target)

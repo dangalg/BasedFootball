@@ -54,11 +54,11 @@ func update(game: Node3D, delta: float) -> void:
 		reason = "receiver_unavailable"
 	elif not ball.grip_holder_id.is_empty():
 		reason = "keeper_collected"
-	elif absf(ball.global_position.x)>20.3 or absf(ball.global_position.z)>12.3:
+	elif (absf(ball.global_position.x) > (50.2 if game.eleven_a_side else 20.3) or absf(ball.global_position.z) > (32.2 if game.eleven_a_side else 12.3)) and not game.throw_entering_pitch():
 		reason = "left_court"
 	elif flight_velocity.length()>1.5 and velocity.length()>1.0 and velocity.normalized().dot(flight_velocity.normalized())<.55:
 		reason = "deflected"
-	elif flat(receiver.global_position-ball.global_position).length()>18.0:
+	elif flat(receiver.global_position-ball.global_position).length() > (28.0 if receiver.eleven_slot >= 0 else 18.0):
 		reason = "unreachable"
 	if not reason.is_empty():
 		game._record("receiver_cancelled", receiver, {"reason":reason})
@@ -77,7 +77,7 @@ static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlaye
 			continue
 		var offset := flat(player.global_position-origin)
 		var distance := offset.length()
-		if distance < 1.0 or distance > 18.0:
+		if distance < 1.0 or distance > (28.0 if passer.eleven_slot >= 0 else 18.0):
 			continue
 		var along := offset.dot(direction)
 		var lateral := (offset-direction*along).length()
@@ -91,22 +91,35 @@ static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlaye
 
 static func interception_point(receiver: FootballPlayer, ball: FootballBall) -> Vector3:
 	var velocity := flat(ball.linear_velocity)
-	var target := ball.global_position
+	var origin := ball.global_position
+	var airborne := receiver.eleven_slot >= 0 and (origin.y > 0.45 or ball.linear_velocity.y > 1.0)
+	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+	var earliest := 0.15
+	var damping := 0.52
+	if airborne:
+		# Run to the first playable part of the flight instead of the shadow.
+		var rise := ball.linear_velocity.y
+		var drop := maxf(0.0, rise * rise + 2.0 * gravity * (origin.y - 0.45))
+		earliest = maxf(earliest, (rise + sqrt(drop)) / gravity)
+		damping = 0.32
+	var fallback_distance := (1.0 - exp(-damping * earliest)) / damping if airborne else earliest
+	var target := origin + velocity * fallback_distance
 	var best := INF
 	for sample in range(1,19):
 		var time := float(sample)*.075
-		# Same approximate rolling deceleration as the free ball; observation is
-		# refreshed each decision, so a bounce cannot reserve the old trajectory.
-		var point := ball.global_position+velocity*((1.0-exp(-.52*time))/.52)
+		if airborne and time < earliest:
+			continue
+		# Refresh on every decision so a bounce changes the projected target.
+		var point := origin + velocity * ((1.0 - exp(-damping * time)) / damping)
 		var needed := flat(point-receiver.global_position).length()
 		var reach := receiver.pace*time*.82+.55
 		var cost := absf(needed-reach)+time*.12
 		if needed <= reach and cost < best:
 			best = cost
 			target = point
-	if best == INF:
-		target = ball.global_position+velocity*.15
-	return Vector3(clampf(target.x,-17.7,17.7),0,clampf(target.z,-11.5,11.5))
+	var x := 49.7 if receiver.eleven_slot >= 0 else 17.7
+	var z := 31.7 if receiver.eleven_slot >= 0 else 11.5
+	return Vector3(clampf(target.x, -x, x), 0, clampf(target.z, -z, z))
 
 static func flat(value: Vector3) -> Vector3:
 	return Vector3(value.x,0,value.z)

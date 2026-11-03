@@ -2,6 +2,11 @@ class_name FootballBall
 extends RigidBody3D
 
 const RADIUS := 0.11
+const FINESSE_DURATION := 1.4
+const FINESSE_SPIN := 36.0
+const FINESSE_MAX_SPIN_CHANGE := 50.0
+const FINESSE_MAX_ACCELERATION := 4.2
+const FINESSE_MAGNUS := 0.0035
 
 var last_touch_team: int = -1
 var last_touch_id: String = ""
@@ -20,6 +25,9 @@ var pass_team: int = -1
 var pass_target := Vector3.ZERO
 var pass_remaining: float = 0.0
 var pass_end_reason: String = ""
+var _finesse_remaining := 0.0
+var _finesse_heading := Vector3.ZERO
+var _finesse_strength := 0.0
 
 func _physics_process(delta: float) -> void:
 	control_block_remaining = maxf(0, control_block_remaining - delta)
@@ -77,6 +85,7 @@ func _ready() -> void:
 		FootballArt.mesh(self, patch, black)
 
 func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vector3.ZERO) -> void:
+	clear_finesse()
 	if pass_active:
 		clear_pass("receiver_touch" if player_id == pass_receiver_id else "intercepted")
 	last_touch_team = team
@@ -90,6 +99,27 @@ func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vec
 		impulse_audit.pop_front()
 	sleeping = false
 	apply_impulse(impulse, offset)
+
+func begin_finesse(direction: Vector3, signed_curve: float) -> void:
+	# A confirmed strike adds sidespin. Positive curve follows positive yaw.
+	if not direction.is_finite() or not is_finite(signed_curve):
+		return
+	var heading := Vector3(direction.x, 0.0, direction.z)
+	var curve := clampf(signed_curve, -1.0, 1.0)
+	if heading.length_squared() < 0.0001 or absf(curve) < 0.001:
+		return
+	_finesse_heading = heading.normalized()
+	_finesse_strength = absf(curve)
+	_finesse_remaining = FINESSE_DURATION
+	var spin_change := clampf(FINESSE_SPIN * curve - angular_velocity.y,
+		-FINESSE_MAX_SPIN_CHANGE, FINESSE_MAX_SPIN_CHANGE)
+	var inertia := 0.4 * mass * RADIUS * RADIUS
+	apply_torque_impulse(Vector3.UP * (spin_change * inertia))
+
+func clear_finesse() -> void:
+	_finesse_remaining = 0.0
+	_finesse_heading = Vector3.ZERO
+	_finesse_strength = 0.0
 
 func begin_pass(passer: String, receiver: String, team: int, target: Vector3, duration: float) -> void:
 	pass_active = true
@@ -109,10 +139,23 @@ func clear_pass(reason: String) -> void:
 	pass_team = -1
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	var horizontal := Vector3(state.linear_velocity.x, 0.0, state.linear_velocity.z)
 	# Rolling resistance acts on every team equally; no possession attachment.
 	if state.transform.origin.y < RADIUS + 0.045:
-		var horizontal := Vector3(state.linear_velocity.x, 0, state.linear_velocity.z)
 		state.apply_central_force(-horizontal * 0.13)
 	# Explicit aerodynamic spin force, bounded for numerical stability.
 	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0007
 	state.apply_central_force(magnus.limit_length(0.25))
+	if _finesse_remaining <= 0.0:
+		return
+	if not grip_holder_id.is_empty() or horizontal.length_squared() < 1.0 or horizontal.dot(_finesse_heading) <= 0.0:
+		clear_finesse()
+		return
+	var height := state.transform.origin.y
+	var ground_scale := lerpf(0.62, 1.0, smoothstep(RADIUS + 0.02, RADIUS + 0.12, height))
+	var envelope := _finesse_remaining / FINESSE_DURATION
+	var sidespin := Vector3.UP * state.angular_velocity.y
+	var curve_force := sidespin.cross(horizontal) * FINESSE_MAGNUS
+	var limit := mass * FINESSE_MAX_ACCELERATION * _finesse_strength
+	state.apply_central_force(curve_force.limit_length(limit) * ground_scale * envelope)
+	_finesse_remaining = maxf(0.0, _finesse_remaining - state.step)

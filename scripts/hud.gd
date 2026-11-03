@@ -14,6 +14,8 @@ var overlay_hint: Label
 var status: Label
 var selected_number: Label
 var banner_timer: float = 0.0
+var eleven_a_side := false
+var radar: ElevenRadar
 
 const INK := Color("13232e")
 const PAPER := Color("e1e6da")
@@ -34,7 +36,7 @@ func _ready() -> void:
 	top.add_child(badge)
 	badge.size = Vector2(36, 36)
 	_label(top, "BASED FOOTBALL", 19, PAPER, Vector2(58, 10))
-	_label(top, "4 v 4  /  THE COURTYARD", 11, MUTED, Vector2(59, 35))
+	_label(top, "11 v 11  /  FULL PITCH" if eleven_a_side else "4 v 4  /  THE COURTYARD", 11, MUTED, Vector2(59, 35))
 	var score_panel := _panel(root, Vector2(552, 18), Vector2(336, 70))
 	_label(score_panel, "HOME", 14, Color("71b2db"), Vector2(30, 17))
 	_label(score_panel, "AWAY", 14, Color("eb9a7f"), Vector2(263, 17))
@@ -44,7 +46,7 @@ func _ready() -> void:
 	timer_label = _label(score_panel, "03:00", 15, GOLD, Vector2(138, 43))
 	var rules := _panel(root, Vector2(1184, 22), Vector2(232, 60))
 	_label(rules, "ONE BALL. SAME RULES.", 15, PAPER, Vector2(16, 10))
-	_label(rules, "Keepers  /  Rebound boards", 12, MUTED, Vector2(16, 35))
+	_label(rules, "Throw-ins  /  Corners" if eleven_a_side else "Keepers  /  Rebound boards", 12, MUTED, Vector2(16, 35))
 	var player_panel := _panel(root, Vector2(24, 802), Vector2(314, 74))
 	selected_number = _label(player_panel, "07", 32, GOLD, Vector2(14, 6))
 	player_label = _label(player_panel, "ARI / RUNNER", 17, PAPER, Vector2(68, 13))
@@ -70,6 +72,11 @@ func _ready() -> void:
 	banner = _label(root, "", 24, GOLD, Vector2(460, 105))
 	banner.size = Vector2(520, 36)
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if eleven_a_side:
+		radar = ElevenRadar.new()
+		root.add_child(radar)
+		radar.position = Vector2(600, 653)
+		radar.size = Vector2(240, 154)
 	overlay = PanelContainer.new()
 	overlay.position = Vector2(365, 250)
 	overlay.size = Vector2(710, 360)

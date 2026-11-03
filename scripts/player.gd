@@ -1,6 +1,10 @@
 class_name FootballPlayer
 extends RigidBody3D
 
+var eleven_slot: int = -1
+var eleven_home := Vector3.ZERO
+var receive_exit_direction := Vector3.ZERO
+
 signal strike_contact(kind: String)
 signal dribble_contact
 signal physical_event(kind: String, detail: Dictionary)
@@ -9,10 +13,14 @@ const CONTROL_REACH := 0.95
 const FOOT_DISTANCE := 0.61
 const TOUCH_STRIDE_TIME := 0.13
 const BOOT_TOUCH_REACH := FootballBall.RADIUS + 0.12
+const SOLE_STOP_DELAY := 0.15
+const SOLE_GAP_TOLERANCE := 0.018
+const SOLE_SUPPORT_TOLERANCE := 0.045
 const RECEIVE_PREPARE_REACH := 1.45
 const CHASE_MAX_DISTANCE := 3.0
 const CHASE_MEMORY_SECONDS := 1.6
 const MAX_KICK_IMPULSE := 18.0
+const STRIKE_BOOT_REACH := FootballBall.RADIUS + 0.095
 const STEER_ONSET_ANGLE := PI / 15.0 # 12 degrees.
 const STEER_MAX_REQUEST := PI * 0.5
 const STEER_MAX_ROTATION := PI / 9.0 # At most 20 degrees per real contact.
@@ -48,6 +56,8 @@ var right_leg: Node3D
 var ring: MeshInstance3D
 var name_label: Label3D
 var step_phase: float = 0.0
+var throw_in_phase := -1.0
+var throw_in_recovery := 0.0
 var tackle_remaining: float = 0.0
 var match_touches: int = 0
 var close_control_ball: FootballBall
@@ -69,8 +79,10 @@ var shield_direction := Vector3.ZERO
 var kick_strength: float = 0.0
 var kick_lift: float = 0.0
 var kick_kind: String = "pass"
+var kick_style: String = ""
 var kick_target_offset := Vector3.ZERO
 var kick_contact_time: float = 0.0
+var kick_planned_gap: float = -1.0
 var kick_foot_right: bool = true
 var kick_start_foot_offset := Vector3.ZERO
 var last_kick_ball_world := Vector3.ZERO
@@ -110,6 +122,10 @@ var receiving_ball: FootballBall
 var completed_receive_contacts: int = 0
 var last_receive_contact_frame: int = -1000
 var dribble_is_receive: bool = false
+var sole_stop_active := false
+var sole_support_world := Vector3.ZERO
+var sole_previous_marker := Vector3.ZERO
+var sole_support_peak_slip := 0.0
 var last_dribble_ball_world := Vector3.ZERO
 var last_control_reason: String = "idle"
 var last_control_boot_gap: float = -1.0
@@ -162,6 +178,9 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	if throw_in_recovery > 0.0:
+		throw_in_recovery = maxf(0.0, throw_in_recovery - delta)
+		throw_in_phase = lerpf(0.7, 1.0, 1.0 - throw_in_recovery / 0.18) if throw_in_recovery > 0.0 else -1.0
 	hop_cooldown = maxf(0, hop_cooldown - delta)
 	if ragdoll != null:
 		ring.visible = selected
@@ -209,12 +228,24 @@ func _physics_process(delta: float) -> void:
 	if action_kind != "":
 		action_elapsed += delta
 	if action_kind == "kick" and not action_has_hit and is_instance_valid(action_ball):
-		kick_target_offset = _predicted_contact_offset(action_ball, maxf(0, kick_contact_time - action_elapsed))
-		kick_target_offset.y = clampf(kick_target_offset.y, 0.06, 0.55)
+		var time_to_strike := maxf(0.0, kick_contact_time - action_elapsed)
+		if eleven_slot < 0:
+			kick_target_offset = _predicted_contact_offset(action_ball, time_to_strike)
+			kick_target_offset.y = clampf(kick_target_offset.y, 0.06, 0.55)
+		elif action_elapsed <= kick_contact_time + 0.008:
+			var updated := _kick_ball_offset(action_ball, time_to_strike)
+			if _kick_foot_gap(updated, time_to_strike, action_direction, kick_foot_right) <= STRIKE_BOOT_REACH:
+				kick_target_offset = updated
+				kick_target_offset.y = clampf(kick_target_offset.y, 0.06, 0.55)
 	if dribble_active:
 		dribble_elapsed += delta
+		if sole_stop_active and not dribble_has_hit and stick_magnitude > 0.10:
+			sole_stop_active = false
+			dribble_active = false
 		var tracking_allowed: bool = _can_receive(dribble_ball) if dribble_is_receive else (is_instance_valid(dribble_ball) and can_control(dribble_ball))
-		if not dribble_has_hit and tracking_allowed:
+		if dribble_active and sole_stop_active and not dribble_has_hit and tracking_allowed:
+			dribble_target_offset = _sole_ankle_target(dribble_ball, maxf(0.0, SOLE_STOP_DELAY - dribble_elapsed)) - global_position
+		elif dribble_active and not dribble_has_hit and tracking_allowed:
 			# A foot can track a nearby moving ball during its approach. It does not
 			# track or pull the ball after contact, or when the ball leaves reach.
 			var time_to_contact := maxf(0, dribble_contact_time - dribble_elapsed)
@@ -256,6 +287,10 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	state.apply_central_force(acceleration * mass * (0.2 if hop_launched and hop_active else 1.0))
 
 func _running_target_velocity(stride_remaining: float, future_time: float = 0.0) -> Vector3:
+	if throw_in_phase >= 0.0:
+		return Vector3.ZERO
+	if sole_stop_active and dribble_active and not dribble_has_hit:
+		return Vector3.ZERO
 	# Free chase uses normal running. Only an actual touch shortens a stride;
 	# a short release stride can finish before the next physical stop contact.
 	var speed := pace if sprint and energy > 0.05 else pace * 0.66
@@ -266,12 +301,31 @@ func _running_target_velocity(stride_remaining: float, future_time: float = 0.0)
 		speed *= 0.65
 	if intent.length_squared() < 0.0025 and stop_stride_remaining > future_time and is_instance_valid(chase_ball) and chasing_ball(chase_ball):
 		return stop_stride_direction * stop_stride_speed
-	return intent.limit_length(1.0) * speed
+	var desired := intent.limit_length(1.0) * speed
+	if eleven_slot < 0 or not selected or jockey or desired.length_squared() < 0.09 or future_time >= chase_remaining or not chasing_ball(chase_ball):
+		return desired
+	if chase_ball.global_position.y > 0.4:
+		return desired
+	var requested := desired.normalized()
+	var roll := _flat(chase_ball.linear_velocity)
+	if absf(_incoming_turn_angle(roll, requested)) < STEER_ONSET_ANGLE:
+		return desired
+	var gap := _flat(chase_ball.global_position - global_position)
+	var projected := gap + roll * ((1.0 - exp(-0.52 * 0.19)) / 0.52)
+	if projected.length_squared() < 0.09 or requested.dot(projected.normalized()) < -0.25:
+		return desired
+	# Bend the catch-up stride toward the observed roll while the ball is still
+	# free. A stick reversal away from the roll immediately exits this assist.
+	var correction := requested.signed_angle_to(projected.normalized(), Vector3.UP)
+	var follow := requested.rotated(Vector3.UP, clampf(correction, -0.60, 0.60))
+	var approach_speed := clampf((gap.dot(follow) - 0.48) * 5.0, -1.2, 3.0)
+	var max_speed := maxf(desired.length() * 0.55, roll.dot(follow) + approach_speed)
+	return follow * minf(desired.length(), max_speed)
 
 func _running_acceleration(velocity: Vector3, desired: Vector3) -> Vector3:
 	return ((desired - velocity) * 7.5).limit_length(24.0)
 
-func _predict_running_displacement(duration: float) -> Vector3:
+func _predict_running_displacement(duration: float, planned_kick: bool = false, planned_stop: bool = false) -> Vector3:
 	# This is a prediction only. Collisions still determine the actual trajectory.
 	var velocity := Vector3(linear_velocity.x, 0, linear_velocity.z)
 	var displacement := Vector3.ZERO
@@ -282,8 +336,8 @@ func _predict_running_displacement(duration: float) -> Vector3:
 		damping += float(ProjectSettings.get_setting("physics/3d/default_linear_damp", 0.1))
 	while elapsed < duration - 0.00001:
 		var step := minf(1.0 / float(Engine.physics_ticks_per_second), duration - elapsed)
-		var desired := _running_target_velocity(stride_remaining, elapsed)
-		if action_kind == "kick":
+		var desired := Vector3.ZERO if planned_stop else (_running_target_velocity(0.0, INF) if planned_kick else _running_target_velocity(stride_remaining, elapsed))
+		if planned_kick or action_kind == "kick":
 			desired *= 0.35
 		velocity += _running_acceleration(velocity, desired) * step
 		velocity *= maxf(0, 1.0 - damping * step)
@@ -345,12 +399,65 @@ func chase_target(ball: FootballBall) -> Vector3:
 func predict_strike_reach(ball: FootballBall, horizon: float = 0.18) -> bool:
 	if not is_instance_valid(ball) or not upright_ready() or not ball.grip_holder_id.is_empty():
 		return false
+	if eleven_slot >= 0:
+		var direction := _flat(aim).normalized()
+		if direction == Vector3.ZERO:
+			direction = _flat(ball.global_position - global_position).normalized()
+		return not _plan_kick(ball, direction, 0.10, horizon).is_empty()
 	for sample in range(5):
 		var delay := maxf(0, horizon) * float(sample) / 4.0
 		var right := _choose_touch_foot(ball, delay, -0.22)
 		if ball.global_position.y + ball.linear_velocity.y * delay < 0.65 and _predicted_foot_gap(ball, delay, right, -0.22) <= FootballBall.RADIUS + 0.095:
 			return true
 	return false
+
+func _kick_ball_offset(ball: FootballBall, delay: float) -> Vector3:
+	var velocity := ball.linear_velocity
+	var grounded := ball.global_position.y < FootballBall.RADIUS + 0.045 and velocity.y < 0.8
+	var decay := 0.52 if grounded else 0.22
+	var predicted := ball.global_position + _flat(velocity) * ((1.0 - exp(-decay * delay)) / decay)
+	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+	predicted.y = maxf(FootballBall.RADIUS, predicted.y + velocity.y * delay - 0.5 * gravity * delay * delay)
+	return predicted - global_position - _predict_running_displacement(delay, true)
+
+func _kick_foot_gap(offset: Vector3, delay: float, direction: Vector3, right: bool) -> float:
+	var projected := offset
+	projected.y = clampf(offset.y, 0.06, 0.55)
+	var current_yaw := body_visual.rotation.y
+	var facing_yaw := atan2(-direction.x, -direction.z) if direction != Vector3.ZERO else current_yaw
+	var hz := float(Engine.physics_ticks_per_second)
+	var yaw_weight := 1.0 - pow(1.0 - minf(12.0 / hz, 1.0), delay * hz)
+	var future_yaw := lerp_angle(current_yaw, facing_yaw, yaw_weight)
+	var yaw_delta := current_yaw - future_yaw
+	var visual_offset := body_visual.global_position - global_position
+	var target := body_visual.global_position + (projected - visual_offset).rotated(Vector3.UP, yaw_delta)
+	var hip_shift := visual_controller.predicted_control_hip_shift(self, delay, -0.22)
+	var reach_gap := visual_controller.foot_reach_gap(self, target, right, hip_shift)
+	return reach_gap + absf(offset.y - projected.y)
+
+func _plan_kick(ball: FootballBall, direction: Vector3, preferred: float, horizon: float) -> Dictionary:
+	# The minimum phase leaves time for the planted step and backswing. Samples
+	# and scoring use the same post-queue braking and hip pose as the kick.
+	var earliest := 0.065
+	var latest := minf(horizon, 0.19)
+	if latest < earliest:
+		return {}
+	var plan := {}
+	var best := INF
+	for sample in range(6):
+		var delay := lerpf(earliest, latest, float(sample) / 5.0)
+		var offset := _kick_ball_offset(ball, delay)
+		if _flat(offset).length_squared() > 1.25 * 1.25:
+			continue
+		for right: bool in [true, false]:
+			var gap := _kick_foot_gap(offset, delay, direction, right)
+			if gap > STRIKE_BOOT_REACH:
+				continue
+			var score := gap + absf(delay - preferred) * 0.65
+			if score < best:
+				best = score
+				plan = {"time": delay, "right": right, "gap": gap, "offset": offset}
+	return plan
 
 func hop() -> bool:
 	if not upright_ready() or hop_cooldown > 0 or global_position.y > 0.12 or absf(linear_velocity.y) > 0.6:
@@ -367,7 +474,7 @@ func hop() -> bool:
 	return true
 
 func upright_ready() -> bool:
-	return ragdoll == null and not hop_active and action_kind == "" and recovery_remaining <= 0 and stagger_remaining <= 0
+	return ragdoll == null and not hop_active and action_kind == "" and recovery_remaining <= 0 and stagger_remaining <= 0 and throw_in_phase < 0.0
 
 func receive_slide(impulse: Vector3, contact: Vector3, relative_speed: float) -> void:
 	if ragdoll != null:
@@ -405,10 +512,16 @@ func reach_ball(ball: FootballBall, distance: float = CONTROL_REACH) -> bool:
 	difference.y = 0
 	return difference.length() < distance and ball.global_position.y < 0.75
 
-func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "") -> bool:
+func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, kind: String = "", style: String = "") -> bool:
 	if not upright_ready():
 		return false
 	if not is_instance_valid(ball) or kick_cooldown > 0 or not ball.grip_holder_id.is_empty() or _flat(direction).length_squared() < 0.0001:
+		return false
+	var strike_direction := _flat(direction).normalized()
+	var strike_kind := kind if kind != "" else ("shot" if strength >= 15.0 else "pass")
+	var preferred := 0.14 if strike_kind == "shot" else 0.10
+	var plan := _plan_kick(ball, strike_direction, preferred, 0.19) if eleven_slot >= 0 else {}
+	if eleven_slot >= 0 and plan.is_empty():
 		return false
 	# A loose or incoming ball can be struck. This queues a physical swing,
 	# including a possible air miss; ownership and dribble speed are irrelevant.
@@ -418,18 +531,20 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	chase_remaining = 0
 	stop_stride_remaining = 0
 	dribble_phase = "idle"
-	action_direction = Vector3(direction.x, 0, direction.z).normalized()
-	kick_kind = kind if kind != "" else ("shot" if strength >= 15.0 else "pass")
+	action_direction = strike_direction
+	kick_kind = strike_kind
+	kick_style = style if strike_kind == "shot" and style in ["finesse", "chip", "power"] else ""
 	kick_strength = strength
 	kick_lift = lift
-	kick_contact_time = 0.14 if kick_kind == "shot" else 0.10
+	kick_contact_time = float(plan.get("time", preferred))
+	kick_planned_gap = float(plan.get("gap", -1.0))
 	action_duration = 0.42 if kick_kind == "shot" else 0.32
 	action_elapsed = 0
 	action_ball = ball
 	action_has_hit = false
-	kick_foot_right = _choose_touch_foot(ball, kick_contact_time, -0.22)
+	kick_foot_right = bool(plan["right"]) if eleven_slot >= 0 else _choose_touch_foot(ball, kick_contact_time, -0.22)
 	kick_start_foot_offset = _boot(kick_foot_right).global_position - global_position
-	kick_target_offset = _predicted_contact_offset(ball, kick_contact_time)
+	kick_target_offset = plan["offset"] if eleven_slot >= 0 else _predicted_contact_offset(ball, kick_contact_time)
 	kick_target_offset.y = clampf(kick_target_offset.y, 0.06, 0.55)
 	kick_cooldown = action_duration + 0.10
 	close_control_remaining = 0.0
@@ -471,6 +586,9 @@ func dribble(ball: FootballBall) -> bool:
 	# actual contact below still waits for the previous touch cooldown to end.
 	if touch_cooldown > 0 and (not steering or touch_cooldown > STEER_PREPARE_LEAD):
 		return false
+	if eleven_slot >= 0 and selected and stopping and has_chase:
+		_offer_sole_stop(ball)
+		return false
 	if has_chase and not turning and not stopping:
 		var closing_speed := (ball_velocity - player_velocity).dot(relative.normalized())
 		var caught_up := relative.length() < 0.52 or (closing_speed < -0.12 and relative.length() <= chase_peak_gap - 0.12)
@@ -478,8 +596,9 @@ func dribble(ball: FootballBall) -> bool:
 			last_control_reason = "free_chase"
 			return false
 	# A settled ball needs no recurring impulses or foot animation.
-	if ball.last_touch_id == player_id and stick < 0.05 and player_velocity.length() < 0.12 and ball_velocity.length() < 0.12 and relative.length() > 0.45 and relative.length() < 0.75:
-		return false
+	if ball.last_touch_id == player_id and stick < 0.05 and player_velocity.length() < 0.12 and ball_velocity.length() < 0.12:
+		if (eleven_slot >= 0 and selected) or (relative.length() > 0.45 and relative.length() < 0.75):
+			return false
 	var contact_delay := 0.055 if turning or stopping else 0.075
 	var foot_right := _choose_touch_foot(ball, contact_delay)
 	var predicted_gap := _predicted_foot_gap(ball, contact_delay, foot_right)
@@ -489,6 +608,7 @@ func dribble(ball: FootballBall) -> bool:
 		control_reach_rejections += 1
 		return false
 	dribble_active = true
+	sole_stop_active = false
 	dribble_is_receive = false
 	dribble_foot_right = foot_right
 	dribble_trap = reversing or stopping
@@ -512,6 +632,103 @@ func dribble(ball: FootballBall) -> bool:
 	last_control_reason = "swing_scheduled"
 	control_attempts += 1
 	return false # Scheduling a swing is not a ball touch.
+
+func _sole_ankle_target(ball: FootballBall, delay: float) -> Vector3:
+	var travel := _flat(ball.linear_velocity) * ((1.0 - exp(-0.52 * delay)) / 0.52)
+	return ball.global_position + travel + Vector3.UP * FootballBall.RADIUS - visual_controller.sole_target_offset(self)
+
+func _offer_sole_stop(ball: FootballBall) -> void:
+	if ball.global_position.y > 0.17 or absf(ball.linear_velocity.y) > 0.35:
+		return
+	var roll := _flat(ball.linear_velocity)
+	if roll.length() < 0.15 or _flat(ball.global_position - global_position).dot(-body_visual.global_basis.z) < -0.05:
+		return
+	var target := _sole_ankle_target(ball, SOLE_STOP_DELAY)
+	var displacement := _predict_running_displacement(SOLE_STOP_DELAY, false, true)
+	var hip_shift := visual_controller.predicted_control_hip_shift(self, SOLE_STOP_DELAY)
+	var chosen := false
+	var best := INF
+	for right: bool in [false, true]:
+		var support: Vector3 = _boot(not right).global_position
+		var lift := absf(support.y - 0.053)
+		if lift > 0.085:
+			continue
+		support.y = 0.053
+		var strike_gap := visual_controller.foot_reach_gap(self, target - displacement, right, hip_shift)
+		var support_gap := visual_controller.foot_reach_gap(self, support - displacement, not right, hip_shift)
+		var score := lift + strike_gap * 2.0 + support_gap * 2.0
+		if strike_gap <= 0.018 and support_gap <= 0.025 and score < best:
+			best = score
+			chosen = true
+			dribble_foot_right = right
+			sole_support_world = support
+	if not chosen:
+		last_control_reason = "sole_plant_unreachable"
+		return
+	sole_stop_active = true
+	dribble_active = true
+	dribble_is_receive = false
+	dribble_trap = true
+	dribble_steer = false
+	dribble_phase = "prepare"
+	dribble_elapsed = 0.0
+	dribble_contact_time = SOLE_STOP_DELAY
+	dribble_duration = SOLE_STOP_DELAY + 0.07
+	dribble_follow_end = dribble_duration
+	dribble_has_hit = false
+	dribble_ball = ball
+	dribble_target_offset = target - global_position
+	dribble_start_foot_offset = _boot(dribble_foot_right).global_position - global_position
+	sole_previous_marker = visual_controller.sole_marker(self, dribble_foot_right)
+	last_dribble_ball_world = ball.global_position
+	sole_support_peak_slip = 0.0
+	last_control_boot_gap = -1.0
+	last_control_reason = "sole_stop_scheduled"
+	control_attempts += 1
+
+func _try_sole_contact() -> void:
+	var marker := visual_controller.sole_marker(self, dribble_foot_right)
+	var center := dribble_ball.global_position
+	var support := visual_controller.sole_marker(self, not dribble_foot_right)
+	var support_slip := _flat(_boot(not dribble_foot_right).global_position - sole_support_world).length()
+	if dribble_elapsed >= 0.06 and not dribble_has_hit:
+		sole_support_peak_slip = maxf(sole_support_peak_slip, support_slip)
+	var previous_relative := sole_previous_marker - last_dribble_ball_world
+	var current_relative := marker - center
+	var closest := Geometry3D.get_closest_point_to_segment(Vector3.ZERO, previous_relative, current_relative)
+	var gap := closest.length()
+	var descending := current_relative.y <= previous_relative.y + 0.002
+	sole_previous_marker = marker
+	if dribble_has_hit or dribble_elapsed < SOLE_STOP_DELAY - 0.015 or dribble_elapsed > SOLE_STOP_DELAY + 0.055:
+		return
+	last_control_boot_gap = gap if last_control_boot_gap < 0.0 else minf(last_control_boot_gap, gap)
+	if dribble_ball.control_candidate_id != player_id or not can_control(dribble_ball) or touch_cooldown > 0.0:
+		last_control_reason = "sole_no_longer_eligible"
+		return
+	if center.y > 0.17 or absf(dribble_ball.linear_velocity.y) > 0.35:
+		last_control_reason = "sole_ball_airborne"
+		return
+	if gap > FootballBall.RADIUS + SOLE_GAP_TOLERANCE or gap < FootballBall.RADIUS - 0.025 or closest.y < 0.075 or not descending:
+		last_control_reason = "sole_not_on_ball"
+		return
+	if absf(support.y) > 0.025 or sole_support_peak_slip > SOLE_SUPPORT_TOLERANCE:
+		last_control_reason = "sole_support_not_planted"
+		return
+	var before := dribble_ball.linear_velocity
+	var impulse := (-_flat(before) * dribble_ball.mass).limit_length(2.8 * touch_skill)
+	if impulse.length_squared() < 0.00001:
+		return
+	var inertia := 0.4 * dribble_ball.mass * FootballBall.RADIUS * FootballBall.RADIUS
+	var spin_brake := (-dribble_ball.angular_velocity * inertia).limit_length(impulse.length() * FootballBall.RADIUS)
+	dribble_ball.touch(team, player_id, impulse)
+	dribble_ball.apply_torque_impulse(spin_brake)
+	var ankle_offset := _boot(dribble_foot_right).global_position - global_position
+	_finish_control_contact(gap, "sole_stop")
+	dribble_target_offset = ankle_offset
+	touch_cooldown = 0.26
+	chase_remaining = 0.0
+	stop_stride_remaining = 0.0
+	physical_event.emit("sole_stop", {"foot": "right" if dribble_foot_right else "left", "boot_gap": gap, "support_gap": support.y, "support_slip": sole_support_peak_slip, "ball_velocity_before": _vector(before), "predicted_velocity_after": _vector(before + impulse / dribble_ball.mass), "impulse": _vector(impulse), "touch_serial": dribble_ball.touch_serial})
 
 func _can_receive(ball: FootballBall) -> bool:
 	if not is_instance_valid(ball) or not upright_ready() or kick_cooldown > 0 or touch_cooldown > 0:
@@ -548,6 +765,7 @@ func receive(ball: FootballBall) -> bool:
 		control_reach_rejections += 1
 		return false
 	receiving_active = true
+	sole_stop_active = false
 	receiving_ball = ball
 	dribble_is_receive = true
 	dribble_active = true
@@ -577,12 +795,15 @@ func _update_dribble_contact() -> void:
 		return
 	var boot_world: Vector3 = _boot(dribble_foot_right).global_position
 	if action_kind != "" or not is_instance_valid(dribble_ball) or stagger_remaining > 0 or recovery_remaining > 0:
+		sole_stop_active = false
 		dribble_active = false
 		receiving_active = false
 		last_control_reason = "swing_interrupted"
 		dribble_phase = "idle"
 		return
-	if not dribble_has_hit and dribble_elapsed >= dribble_contact_time - 0.008 and dribble_elapsed <= dribble_contact_time + 0.055:
+	if sole_stop_active:
+		_try_sole_contact()
+	elif not dribble_has_hit and dribble_elapsed >= dribble_contact_time - 0.008 and dribble_elapsed <= dribble_contact_time + 0.055:
 		var contact_gap := _moving_boot_distance(last_dribble_ball_world, dribble_ball.global_position, last_boot_world, boot_world)
 		last_control_boot_gap = contact_gap if last_control_boot_gap < 0 else minf(last_control_boot_gap, contact_gap)
 		var eligible := _can_receive(dribble_ball) if dribble_is_receive else (touch_cooldown <= 0 and can_control(dribble_ball))
@@ -607,6 +828,7 @@ func _update_dribble_contact() -> void:
 			control_misses += 1
 			physical_event.emit("control_miss", {"receive": dribble_is_receive, "reason": last_control_reason, "minimum_boot_gap": last_control_boot_gap, "predicted_reach_gap": last_control_reach_gap})
 		dribble_active = false
+		sole_stop_active = false
 		receiving_active = false
 		dribble_phase = "free_chase" if chasing_ball(dribble_ball) else "idle"
 
@@ -637,10 +859,16 @@ func _apply_dribble_touch(contact_gap: float) -> void:
 			# Redirect the incoming roll with a small sideways nudge. Preserve
 			# its speed and only add enough forward lead to leave the boot again;
 			# never target a position or spend the whole touch braking to 2.2m/s.
-			planned_rotation = clampf(signed_turn, -STEER_MAX_ROTATION, STEER_MAX_ROTATION)
+			var cut_limit := deg_to_rad(33.0) if eleven_slot >= 0 and selected else STEER_MAX_ROTATION
+			planned_rotation = clampf(signed_turn, -cut_limit, cut_limit)
 			var steering_direction := incoming_flat.normalized().rotated(Vector3.UP, planned_rotation)
 			var modest_lead := minf(base_speed * stick + lead_speed, velocity.length() + 0.45 * stick)
 			var steering_speed := maxf(incoming_flat.length(), modest_lead)
+			if eleven_slot >= 0 and selected:
+				# A sharp change of heading can give up some pace to keep the
+				# next stride within reach. The same finite impulse pays for it.
+				var cut_pace := maxf(incoming_flat.length() * 0.58, velocity.dot(steering_direction) + 0.7 * stick)
+				steering_speed = minf(steering_speed, cut_pace)
 			target_velocity = steering_direction * steering_speed
 		elif dribble_trap:
 			# A turn is a first touch into the new direction, not a full-speed
@@ -659,7 +887,8 @@ func _apply_dribble_touch(contact_gap: float) -> void:
 	var free_seconds := 0.20 if fast else 0.16
 	touch_cooldown = free_seconds
 	if stick > 0.05:
-		_remember_free_ball(dribble_ball, _flat(predicted_after).normalized() if dribble_steer else direction)
+		var follow_roll := dribble_steer or (eleven_slot >= 0 and selected and dribble_trap and _flat(predicted_after).length() > 0.3)
+		_remember_free_ball(dribble_ball, _flat(predicted_after).normalized() if follow_roll else direction)
 	else:
 		chase_remaining = 0
 		stop_stride_remaining = 0
@@ -688,6 +917,16 @@ func _cushion_receive(contact_gap: float) -> void:
 	direction.y = 0
 	direction = direction.normalized()
 	var target := velocity + direction * 0.65
+	if eleven_slot >= 0:
+		if not selected and receive_exit_direction.length_squared() > 0.01:
+			direction = _flat(receive_exit_direction).normalized()
+		elif selected and intent.length_squared() <= 0.01:
+			direction = Vector3.ZERO
+		# Absorb the approach momentum before starting the next touch. A
+		# receiver running back to meet the pass can still turn it upfield.
+		var carry_speed := clampf(maxf(0.0, velocity.dot(direction)) + 0.75, 1.35, 3.0)
+		target = direction * carry_speed
+	receive_exit_direction = Vector3.ZERO
 	target.y = incoming.y * 0.35
 	var impulse := ((target - incoming) * dribble_ball.mass).limit_length(4.5 * touch_skill)
 	# Snapshot the flight identity before touch() ends that flight.
@@ -706,9 +945,11 @@ func _cushion_receive(contact_gap: float) -> void:
 	dribble_follow_direction = direction
 	preferred_touch_foot_right = not dribble_foot_right
 	touch_cooldown = 0.12
-	_remember_free_ball(dribble_ball, direction)
+	var outgoing := incoming + impulse / dribble_ball.mass
+	var chase_heading := _flat(outgoing).normalized() if eleven_slot >= 0 else direction
+	_remember_free_ball(dribble_ball, chase_heading)
 	_finish_control_contact(contact_gap, "receive_contact")
-	physical_event.emit("receive_contact", {"passer": passer, "receiver": receiver, "foot": "right" if dribble_foot_right else "left", "incoming_touch_serial": incoming_serial, "touch_serial": dribble_ball.touch_serial, "boot_gap": contact_gap, "incoming_speed": incoming.length(), "incoming_velocity": _vector(incoming), "applied_impulse": _vector(impulse), "touch_skill": touch_skill})
+	physical_event.emit("receive_contact", {"passer": passer, "receiver": receiver, "foot": "right" if dribble_foot_right else "left", "incoming_touch_serial": incoming_serial, "touch_serial": dribble_ball.touch_serial, "boot_gap": contact_gap, "incoming_speed": incoming.length(), "incoming_velocity": _vector(incoming), "applied_impulse": _vector(impulse), "touch_skill": touch_skill, "ball_position": _vector(dribble_ball.global_position), "predicted_velocity_after": _vector(outgoing)})
 
 func _finish_control_contact(contact_gap: float, reason: String) -> void:
 	dribble_has_hit = true
@@ -778,12 +1019,16 @@ func _update_challenge() -> void:
 			if action_elapsed >= kick_contact_time - 0.015 and action_elapsed <= kick_contact_time + 0.045:
 				var contact_distance := _moving_boot_distance(last_kick_ball_world, action_ball.global_position, last_boot_world, boot_world)
 				last_kick_boot_gap = contact_distance if last_kick_boot_gap < 0 else minf(last_kick_boot_gap, contact_distance)
-				if contact_distance <= FootballBall.RADIUS + 0.095:
+				if contact_distance <= STRIKE_BOOT_REACH:
 					var target := action_direction * kick_strength + Vector3.UP * kick_lift
 					var incoming := action_ball.linear_velocity
 					# Preserve part of incoming motion instead of replacing the trajectory.
 					var impulse := ((target - incoming * 0.85) * action_ball.mass).limit_length(MAX_KICK_IMPULSE)
 					action_ball.touch(team, player_id, impulse, Vector3(0, -FootballBall.RADIUS * 0.35, 0))
+					var curve_sign := 0.0
+					if kick_style == "finesse":
+						curve_sign = 1.0 if kick_foot_right else -1.0
+						action_ball.begin_finesse(action_direction, curve_sign)
 					if kick_kind in ["pass", "through", "lob"]:
 						last_delivery_frame = Engine.get_physics_frames()
 						action_ball.passer_block_id = player_id
@@ -796,7 +1041,7 @@ func _update_challenge() -> void:
 					kick_target_offset = action_ball.global_position - global_position
 					match_touches += 1
 					strike_contact.emit(kick_kind)
-					physical_event.emit("kick_contact", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "boot_gap": contact_distance, "incoming_velocity": _vector(incoming), "impulse": _vector(impulse), "predicted_velocity_after": _vector(incoming + impulse / action_ball.mass), "power": kick_strength, "kind": kick_kind, "touch_serial": action_ball.touch_serial})
+					physical_event.emit("kick_contact", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "boot_gap": contact_distance, "planned_boot_gap": kick_planned_gap, "planned_contact_seconds": kick_contact_time, "actual_contact_seconds": action_elapsed, "incoming_velocity": _vector(incoming), "impulse": _vector(impulse), "predicted_velocity_after": _vector(incoming + impulse / action_ball.mass), "power": kick_strength, "kind": kick_kind, "style": kick_style, "curve_sign": curve_sign, "touch_serial": action_ball.touch_serial})
 		elif action_kind == "shoulder":
 			if action_elapsed >= 0.04:
 				for other in get_colliding_bodies():
@@ -827,11 +1072,12 @@ func _update_challenge() -> void:
 		last_kick_ball_world = action_ball.global_position
 	if action_elapsed >= action_duration:
 		if action_kind == "kick" and not action_has_hit:
-			physical_event.emit("kick_miss", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "minimum_boot_gap": last_kick_boot_gap, "kind": kick_kind})
+			physical_event.emit("kick_miss", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "minimum_boot_gap": last_kick_boot_gap, "planned_boot_gap": kick_planned_gap, "planned_contact_seconds": kick_contact_time, "kind": kick_kind, "style": kick_style})
 		recovery_remaining = 0.65 if action_kind == "slide" else (0.0 if action_kind == "kick" else 0.25)
 		body_collider.shape.height = 1.65
 		body_collider.position.y = 0.86
 		action_kind = ""
+		kick_style = ""
 		pending_receiver_id = ""
 
 func _boot_distance(point: Vector3, start: Vector3, end: Vector3) -> float:
@@ -870,6 +1116,11 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	throw_in_phase = -1.0
+	throw_in_recovery = 0.0
+	sole_stop_active = false
+	receive_exit_direction = Vector3.ZERO
+	kick_style = ""
 	if ragdoll != null:
 		ragdoll.finish(true)
 	getting_up = false

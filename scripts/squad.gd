@@ -7,11 +7,14 @@ var completed_matches: int = 0
 var save_path: String = SAVE_PATH
 var last_error: String = ""
 
-func load_squad(is_acceptance: bool = false) -> void:
+func load_squad(is_acceptance: bool = false, eleven: bool = false) -> void:
 	# Acceptance has an isolated save; never modifies the user's squad.
 	if is_acceptance:
 		save_path = "user://acceptance_squad.json"
-	var definition: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/squad.json"))
+	elif eleven:
+		save_path = "user://eleven_squad.json"
+	var definition_path := "res://data/squad_eleven.json" if eleven else "res://data/squad.json"
+	var definition: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(definition_path))
 	entries = definition["players"].duplicate(true)
 	for entry in entries:
 		entry["xp"] = 0
