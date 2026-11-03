@@ -27,6 +27,7 @@ var hud: FootballHUD
 var sound: FootballSound
 var squad := FootballSquad.new()
 var controlled: FootballPlayer
+var called_runner: FootballPlayer
 var selected_index: int = 0
 var scores: Array[int] = [0, 0]
 var remaining: float = DURATION
@@ -171,7 +172,7 @@ func _install_input() -> void:
 		var setup_button := InputEventJoypadButton.new()
 		setup_button.button_index = JOY_BUTTON_Y
 		InputMap.action_add_event("match_setup", setup_button)
-		for binding: Array in [["finesse_modifier", KEY_R, JOY_BUTTON_RIGHT_SHOULDER], ["chip_modifier", KEY_F, JOY_BUTTON_LEFT_SHOULDER]]:
+		for binding: Array in [["finesse_modifier", KEY_R, JOY_BUTTON_RIGHT_SHOULDER], ["chip_modifier", KEY_F, JOY_BUTTON_LEFT_SHOULDER], ["send_run", KEY_G, JOY_BUTTON_DPAD_UP]]:
 			var name_key: String = binding[0]
 			if not InputMap.has_action(name_key):
 				InputMap.add_action(name_key)
@@ -516,6 +517,7 @@ func _physics_process(delta: float) -> void:
 	if eleven_a_side and decision_driver == null:
 		controller_actions["finesse_modifier"] = Input.is_action_pressed("finesse_modifier")
 		controller_actions["chip_modifier"] = Input.is_action_pressed("chip_modifier")
+		controller_actions["send_run"] = Input.is_action_just_pressed("send_run")
 	if decision_driver != null:
 		controller_actions = decision_driver.actions
 	_controller_actions(delta, controller_actions)
@@ -581,18 +583,38 @@ func _strike_direction() -> Vector3:
 	var stick := Vector3(controlled.intent.x, 0, controlled.intent.z)
 	return stick.normalized() if stick.length_squared() > 0.0025 else controlled.aim.normalized()
 
-func _intended_receiver(direction: Vector3) -> FootballPlayer:
+func _intended_receiver(direction: Vector3, preferred: String = "") -> FootballPlayer:
 	# The stick still chooses the kick direction. This chooses who should read
 	# that delivery, without bending the ball towards an unavailable teammate.
-	return FootballReception.choose_receiver(controlled, players, ball.global_position, direction)
+	return FootballReception.choose_receiver(controlled, players, ball.global_position, direction, preferred)
+
+func _send_teammate_run() -> void:
+	if ball.last_touch_team != controlled.team or not _can_modify_shot():
+		return
+	var runner := FootballAI.choose_called_runner(controlled, players, _strike_direction())
+	if runner == null:
+		return
+	if is_instance_valid(called_runner):
+		called_runner.called_run_remaining = 0.0
+	called_runner = runner
+	var origin := runner.global_position
+	runner.called_run_target = Vector3(minf(origin.x + 8.0, 48.0), origin.y, origin.z)
+	runner.called_run_remaining = 1.65
+	_record("run_called", runner, {"target": _vec(runner.called_run_target)})
+	hud.flash(runner.player_name.to_upper() + " MAKES A RUN", 1.3)
 
 func _request_delivery(kind: String, strength: float, lift: float) -> void:
 	var direction := _strike_direction()
-	var receiver := _intended_receiver(direction)
+	var preferred := ""
+	if kind == "through" and is_instance_valid(called_runner) and called_runner.called_run_remaining > 0.0 and ball.last_touch_team == controlled.team:
+		preferred = called_runner.player_id
+	var receiver := _intended_receiver(direction, preferred)
 	# A kick may miss. Reading an intended receiver never rotates the strike
 	# towards that player or creates a successful contact.
 	if controlled.kick(ball, direction, strength, lift, kind):
 		controlled.pending_receiver_id = receiver.player_id if receiver != null else ""
+		if not preferred.is_empty() and controlled.pending_receiver_id == preferred:
+			_record("run_through_requested", controlled, {"receiver": preferred})
 
 func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if pressed.get("hop", false) and not _can_modify_shot() and not (eleven_a_side and pressed.get("primary", false) and pressed.get("finesse_modifier", false)):
@@ -602,6 +624,8 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		charge = 0.0
 		shot_buffer_remaining = 0.0
 		return
+	if eleven_a_side and pressed.get("send_run", false):
+		_send_teammate_run()
 	if pressed.get("primary", false):
 		shot_buffer_remaining = 0.0
 		var attack := _attacking_contact()
@@ -964,7 +988,8 @@ func _unhandled_input(event: InputEvent) -> void:
 						_pause_node(body)
 			ball.freeze = true
 			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
-			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right.", "Options / Esc  RESUME     •     Q  EXIT")
+			var runs := "\nD-pad up / G: send a teammate on a run while on the ball." if eleven_a_side else ""
+			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right." + runs, "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"
 			for saved in pause_states:

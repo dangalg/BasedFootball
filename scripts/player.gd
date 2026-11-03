@@ -33,6 +33,8 @@ var shirt_number: int = 7
 var role: String = ""
 var is_goalkeeper: bool = false
 var pending_receiver_id: String = ""
+var called_run_remaining := 0.0
+var called_run_target := Vector3.ZERO
 var last_received_from: String = ""
 var last_received_frame: int = -100000
 var last_delivery_frame: int = -100000
@@ -178,6 +180,7 @@ func _build_visual() -> void:
 	visual_controller.build(self)
 
 func _physics_process(delta: float) -> void:
+	called_run_remaining = maxf(0.0, called_run_remaining - delta)
 	if throw_in_recovery > 0.0:
 		throw_in_recovery = maxf(0.0, throw_in_recovery - delta)
 		throw_in_phase = lerpf(0.7, 1.0, 1.0 - throw_in_recovery / 0.18) if throw_in_recovery > 0.0 else -1.0
@@ -1116,6 +1119,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
 
 func reset_action() -> void:
+	called_run_remaining = 0.0
 	throw_in_phase = -1.0
 	throw_in_recovery = 0.0
 	sole_stop_active = false

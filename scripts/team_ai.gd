@@ -48,6 +48,18 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if gap < 1.45:
 			player.receive(ball)
 		return "receiving"
+	if eleven and player.called_run_remaining > 0.0:
+		var run_offset := _flat(player.called_run_target - player.global_position)
+		if ball.last_touch_team == player.team and ball.grip_holder_id.is_empty() \
+				and player.upright_ready() and not player.controlling_ball() \
+				and not player.chasing_ball(ball) and run_offset.length_squared() > 0.64:
+			player.aim = run_offset.normalized()
+			player.intent = (run_offset * 0.65).limit_length(1.0)
+			player.sprint = run_offset.length_squared() > 9.0 and player.energy > 0.25
+			player.reaction_timer = 0.0
+			return ""
+		player.called_run_remaining = 0.0
+		player.reaction_timer = 0.0
 	player.reaction_timer -= delta
 	if player.reaction_timer > 0.0:
 		return ""
@@ -426,6 +438,36 @@ static func _eleven_shape_target(player: FootballPlayer, players: Array[Football
 		var goal_side := threat + (own_goal - threat).normalized() * 1.5
 		mark = anchor.lerp(goal_side, 0.65)
 	return mark
+
+static func choose_called_runner(carrier: FootballPlayer, players: Array[FootballPlayer], aim: Vector3) -> FootballPlayer:
+	var attack := Vector3.RIGHT if carrier.team == 0 else Vector3.LEFT
+	var requested := _flat(aim).normalized()
+	if requested.dot(attack) < 0.2:
+		requested = attack
+	var best: FootballPlayer = null
+	var best_score := -INF
+	for teammate: FootballPlayer in players:
+		if teammate == carrier or teammate.team != carrier.team or teammate.selected \
+				or teammate.is_goalkeeper or not teammate.upright_ready():
+			continue
+		var offset := _flat(teammate.global_position - carrier.global_position)
+		var distance := offset.length()
+		var progress := offset.dot(attack)
+		if distance < 2.0 or distance > 28.0 or progress < 1.0:
+			continue
+		var alignment := (offset / distance).dot(requested)
+		if alignment < 0.25:
+			continue
+		var next_space := teammate.global_position + attack * 8.0
+		next_space.x = clampf(next_space.x, -48.0, 48.0)
+		if (next_space - teammate.global_position).dot(attack) < 1.5:
+			continue
+		var space := _space_at(next_space, players, carrier.team, 0.4)
+		var score := alignment * 3.5 + space * 0.36 + minf(progress, 14.0) * 0.10 - distance * 0.08
+		if score > best_score:
+			best = teammate
+			best_score = score
+	return best
 
 static func _eleven_outlet_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, carrier: FootballPlayer, attack: float) -> Vector3:
 	var ball_side := ball_position.z if absf(ball_position.z) > 5.0 else carrier.eleven_home.z
