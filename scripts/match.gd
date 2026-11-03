@@ -4,6 +4,7 @@ signal match_finished
 
 const DURATION := 180.0
 const SHOT_BUFFER_SECONDS := 0.18
+const PASS_CALL_SECONDS := 1.8
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -28,6 +29,7 @@ var sound: FootballSound
 var squad := FootballSquad.new()
 var controlled: FootballPlayer
 var called_runner: FootballPlayer
+var pass_call_remaining := 0.0
 var selected_index: int = 0
 var scores: Array[int] = [0, 0]
 var remaining: float = DURATION
@@ -347,6 +349,7 @@ func _outfield_count() -> int:
 
 func reset_positions(kickoff_team: int) -> void:
 	shot_buffer_remaining = 0.0
+	pass_call_remaining = 0.0
 	throw_entry_time = 0.0
 	kickoff_taker = null
 	kickoff_receiver = null
@@ -433,6 +436,7 @@ func _tick_away_kickoff(delta: float) -> void:
 
 func _select(index: int) -> void:
 	shot_buffer_remaining = 0.0
+	pass_call_remaining = 0.0
 	if controlled != null:
 		controlled.jockey = false
 	selected_index = clampi(index, 0, home_outfield.size()-1)
@@ -489,6 +493,7 @@ func _physics_process(delta: float) -> void:
 		_tick_away_kickoff(delta)
 		return
 	remaining = maxf(0, remaining - delta)
+	pass_call_remaining = maxf(0.0, pass_call_remaining - delta) if ball.last_touch_team == controlled.team else 0.0
 	reception.update(self,delta)
 	if decision_driver != null:
 		decision_driver.decide(delta)
@@ -533,7 +538,8 @@ func _physics_process(delta: float) -> void:
 	for player in players:
 		if player != controlled:
 			var difficulty := opponent_difficulty if player.team == 1 else 1
-			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty)
+			var called_receiver := controlled if pass_call_remaining > 0.0 and player.team == controlled.team else null
+			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty, called_receiver)
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
@@ -677,11 +683,18 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		else:
 			controlled.slide(ball)
 	if pressed.get("pass", false):
-		_request_delivery("pass", 10.5, 0.12)
+		if eleven_a_side and ball.last_touch_team == controlled.team and ball.grip_holder_id.is_empty() and not _attacking_contact() and not controlled.chasing_ball(ball):
+			pass_call_remaining = PASS_CALL_SECONDS
+			_record("pass_called", controlled)
+			hud.flash("PASS REQUESTED", 0.85)
+		else:
+			_request_delivery("pass", 10.5, 0.12)
 	if pressed.get("through", false):
 		_request_delivery("through", 13.5, 0.14)
 
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
+	if pass_call_remaining > 0.0 and player.team == controlled.team and player != controlled and player.pending_receiver_id == controlled.player_id and kind in ["pass", "through"]:
+		pass_call_remaining = 0.0
 	reception.queue_delivery(player,kind,ball)
 	var detail := {"source": "controller" if player == controlled else "ai", "contact_distance": player.last_kick_contact_distance, "ball_position": _vec(ball.global_position), "touch_serial": ball.touch_serial}
 	if kind == "shot":
@@ -785,6 +798,7 @@ func throw_entering_pitch() -> bool:
 func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 	throw_entry_time = 0.0
 	shot_buffer_remaining = 0.0
+	pass_call_remaining = 0.0
 	charging = false
 	charge = 0.0
 	var taker: FootballPlayer = keepers[team] if kind == "goal_kick" else null
@@ -988,7 +1002,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						_pause_node(body)
 			ball.freeze = true
 			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
-			var runs := "\nD-pad up / G: send a teammate on a run while on the ball." if eleven_a_side else ""
+			var runs := "\nD-pad up / G: send a teammate on a run. Cross / Space off the ball: ask for a pass." if eleven_a_side else ""
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right." + runs, "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"

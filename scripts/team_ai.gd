@@ -12,7 +12,7 @@ const ELEVEN_MAX_PASS_DISTANCE := 21.0
 
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
-static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1) -> String:
+static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1, called_receiver: FootballPlayer = null) -> String:
 	if player.is_goalkeeper:
 		return ""
 	if player.ragdoll != null or player.hop_active:
@@ -205,6 +205,20 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	if not ball.grip_holder_id.is_empty() or not player.predict_strike_reach(ball, 0.18):
 		return ""
 	var options := evaluate_options(player, players, ball, eleven)
+	if eleven and called_receiver != null and called_receiver.team == player.team \
+			and called_receiver.upright_ready() and float(options["settle_remaining"]) <= 0.0 \
+			and player.kick_cooldown <= 0.0:
+		# A call overrides the tactical delivery cooldown. The receiving step
+		# still has to settle, and kick() must accept the physical strike.
+		var requested_pass: Dictionary = {}
+		for candidate: Dictionary in options["candidates"]:
+			if candidate["receiver_id"] != called_receiver.player_id or not bool(candidate["eligible"]):
+				continue
+			requested_pass = candidate
+			if candidate["kind"] == "through":
+				break
+		if not requested_pass.is_empty() and _queue_pass(player, ball, options, requested_pass, "called_pass"):
+			return "pass"
 	var best_pass: Dictionary = options["pass"]
 	# Small variation can break a close choice, but cannot make a blocked lane
 	# eligible or manufacture a better-positioned receiver.
@@ -224,17 +238,8 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	if eleven and wants_pass and float(options["forward_space"]) > 2.6 and not bool(options["pressured"]):
 		wants_pass = float(best_pass["advance"]) > 2.5
 	var pass_readiness := minf(0.99, (0.96 if bool(options["pressured"]) else 0.88) + 0.055 * float(level))
-	if wants_pass and confidence < pass_readiness:
-		var destination := _point(best_pass["target"])
-		var pass_direction := _flat(destination - ball.global_position).normalized()
-		var kind := str(best_pass["kind"])
-		var strength := clampf(float(best_pass["speed"]) * player.ai_rng.randf_range(0.97, 1.03), 7.0, 14.0)
-		var actual_direction := pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / maxf(player.touch_skill, 0.1))
-		if player.kick(ball, actual_direction, strength, 0.14 if kind == "through" else 0.12, kind):
-			# A failed queue must not erase an action's existing receiver intent.
-			player.pending_receiver_id = str(best_pass["receiver_id"])
-			_emit_decision(player, options, kind, best_pass, "better_open_teammate", true)
-			return "pass"
+	if wants_pass and confidence < pass_readiness and _queue_pass(player, ball, options, best_pass, "better_open_teammate"):
+		return "pass"
 	if shot_value > carry_value - 0.25 and shot_value >= pass_value - 0.10 and confidence < 0.82 + 0.07 * float(level):
 		var shot_direction := _point(options["shot_direction"])
 		player.aim = shot_direction
@@ -249,6 +254,18 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		reason = "brief_decision_variation"
 	_emit_decision(player, options, "carry", {}, reason)
 	return ""
+
+static func _queue_pass(player: FootballPlayer, ball: FootballBall, options: Dictionary, candidate: Dictionary, reason: String) -> bool:
+	var destination := _point(candidate["target"])
+	var pass_direction := _flat(destination - ball.global_position).normalized()
+	var kind := str(candidate["kind"])
+	var strength := clampf(float(candidate["speed"]) * player.ai_rng.randf_range(0.97, 1.03), 7.0, 14.0)
+	var actual_direction := pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / maxf(player.touch_skill, 0.1))
+	if not player.kick(ball, actual_direction, strength, 0.14 if kind == "through" else 0.12, kind):
+		return false
+	player.pending_receiver_id = str(candidate["receiver_id"])
+	_emit_decision(player, options, kind, candidate, reason, true)
+	return true
 
 # Shared production/diagnostic evaluation. All results are observations of
 # current positions, velocities and actual-contact history; there is no input
