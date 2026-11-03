@@ -7,6 +7,7 @@ const SHOT_BUFFER_SECONDS := 0.18
 const PASS_CALL_SECONDS := 1.8
 const TEAM_PRESS_RANGE := 12.0
 const HALFTIME_SECONDS := 3.0
+const GOAL_CELEBRATION_SECONDS := 1.6
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -55,6 +56,11 @@ var home_formation := 0
 var ends_swapped := false
 var halftime_remaining := 0.0
 var opening_kickoff_team := 0
+var celebration_elapsed := 0.0
+var celebration_team := -1
+var celebration_scorer: FootballPlayer
+var celebration_focus := Vector3.ZERO
+var celebration_zoom := 12.5
 var match_menu: ElevenMatchMenu
 var kickoff_remaining: float = 1.5
 var kickoff_taker: FootballPlayer
@@ -69,6 +75,7 @@ var shot_buffer_charge := 0.0
 var shot_style := "normal"
 var right_stick_latched: bool = false
 var camera_focus := Vector3.ZERO
+var camera_offset := Vector3(0.0, 34.0, 29.0)
 var aim_line: MeshInstance3D
 var action_log: Array[Dictionary] = []
 var match_count: int = 0
@@ -98,11 +105,13 @@ func _ready() -> void:
 	_build_players()
 	ball = FootballBall.new()
 	ball.name = "Ball"
+	if eleven_a_side:
+		ball.set_collision_mask_value(ElevenPitch.NET_COLLISION_LAYER, true)
 	add_child(ball)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 48 if eleven_a_side else 43
-	camera.position = Vector3(0, 34, 29)
+	camera.position = camera_offset
 	add_child(camera)
 	camera.look_at(Vector3.ZERO)
 	camera.current = true
@@ -548,6 +557,9 @@ func _physics_process(delta: float) -> void:
 	if phase == "halftime":
 		_tick_halftime(delta)
 		return
+	if phase == "goal_celebration":
+		_tick_goal_celebration(delta)
+		return
 	if phase != "playing":
 		return
 	if not restart.is_empty():
@@ -618,6 +630,8 @@ func _physics_process(delta: float) -> void:
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
 	_check_goal()
+	if phase == "goal_celebration":
+		return
 	# This is a visible dead-ball restart for an escape over the low boards.
 	if eleven_a_side:
 		_check_eleven_boundary(delta)
@@ -882,10 +896,60 @@ func _check_goal() -> void:
 	if absf(ball.global_position.x) > line + FootballBall.RADIUS and absf(ball.global_position.x) < line + 2.2 and absf(ball.global_position.z) < mouth - FootballBall.RADIUS and ball.global_position.y < bar - FootballBall.RADIUS:
 		var scoring := 0 if ball.global_position.x * keepers[0].attack_sign() > 0 else 1
 		scores[scoring] += 1
-		_record("goal", null, {"team": scoring, "ball": _vec(ball.global_position)})
 		sound.play_event("goal")
-		hud.flash("%s GOAL!" % ("HOME" if scoring == 0 else "AWAY"), 2.0)
-		reset_positions(1 - scoring)
+		if eleven_a_side:
+			_begin_goal_celebration(scoring)
+		else:
+			_record("goal", null, {"team": scoring, "ball": _vec(ball.global_position)})
+			hud.flash("%s GOAL!" % ("HOME" if scoring == 0 else "AWAY"), 2.0)
+			reset_positions(1 - scoring)
+
+func _begin_goal_celebration(scoring: int) -> void:
+	phase = "goal_celebration"
+	celebration_elapsed = 0.0
+	celebration_team = scoring
+	celebration_scorer = null
+	var last_player: FootballPlayer = null
+	for player in players:
+		if player.player_id == ball.last_touch_id:
+			last_player = player
+			break
+	var own_goal := last_player != null and last_player.team != scoring
+	var message := "%s GOAL!" % ("HOME" if scoring == 0 else "AWAY")
+	if last_player != null:
+		message += "  /  " + last_player.player_name.to_upper()
+		if own_goal:
+			message += " (OWN GOAL)"
+		elif last_player.ragdoll == null and not last_player.hop_active:
+			celebration_scorer = last_player
+	celebration_focus = FootballReception.flat(ball.global_position)
+	celebration_zoom = 12.5
+	if celebration_scorer != null:
+		var to_scorer := FootballReception.flat(celebration_scorer.global_position - celebration_focus)
+		celebration_focus += to_scorer.limit_length(20.0) * 0.48
+		celebration_zoom = clampf(9.0 + to_scorer.length() * 0.60, 12.5, 22.0)
+	charging = false
+	charge = 0.0
+	shot_buffer_remaining = 0.0
+	_set_pressure_teammate(null)
+	_pause_players()
+	hud.flash(message, GOAL_CELEBRATION_SECONDS)
+	_record("goal", last_player, {"team": scoring, "ball": _vec(ball.global_position), "own_goal": own_goal})
+
+func _tick_goal_celebration(delta: float) -> void:
+	celebration_elapsed += delta
+	if celebration_scorer != null:
+		celebration_scorer.visual_controller.pose_celebration(celebration_scorer, celebration_elapsed)
+	if celebration_elapsed < GOAL_CELEBRATION_SECONDS:
+		return
+	_resume_players()
+	_record("goal_celebration_finished", celebration_scorer, {"team": celebration_team})
+	celebration_scorer = null
+	if remaining <= 0.0:
+		_finish_match()
+		return
+	phase = "playing"
+	reset_positions(1 - celebration_team)
 
 func _check_eleven_boundary(delta: float) -> void:
 	var point := ball.global_position
@@ -1159,16 +1223,26 @@ func _process(delta: float) -> void:
 	var ball_pos := ball.get_global_transform_interpolated().origin
 	var player_pos := controlled.get_global_transform_interpolated().origin
 	var focus := ball_pos * 0.3
+	var offset := Vector3(0.0, 34.0, 29.0)
+	var on_goal := phase == "goal_celebration"
+	var blend := 1.0 - exp(-delta * (5.0 if on_goal else 3.0))
 	if eleven_a_side:
 		var between := FootballReception.flat(player_pos - ball_pos)
 		focus = ball_pos + between.limit_length(30.0) * 0.40
 		var zoom := clampf(42.0 + between.length() * 0.28, 42.0, 57.0)
-		camera.size = lerpf(camera.size, zoom, 1.0 - exp(-delta * 3.0))
-	focus.x = clampf(focus.x, -37.0 if eleven_a_side else -2.5, 37.0 if eleven_a_side else 2.5)
-	focus.y = 0
+		if on_goal:
+			focus = celebration_focus + Vector3.UP * 0.7
+			offset = Vector3(signf(celebration_focus.x) * 5.5, 5.6, 9.0)
+			zoom = celebration_zoom
+		camera.size = lerpf(camera.size, zoom, blend)
+	var horizontal_limit := 48.0 if on_goal else (37.0 if eleven_a_side else 2.5)
+	focus.x = clampf(focus.x, -horizontal_limit, horizontal_limit)
+	if not on_goal:
+		focus.y = 0.0
 	focus.z = clampf(focus.z, -21.0 if eleven_a_side else -1.6, 21.0 if eleven_a_side else 1.6)
-	camera_focus = camera_focus.lerp(focus, 1.0 - exp(-delta * 3.0))
-	camera.position = camera_focus + Vector3(0, 34, 29)
+	camera_focus = camera_focus.lerp(focus, blend)
+	camera_offset = camera_offset.lerp(offset, blend)
+	camera.position = camera_focus + camera_offset
 	camera.look_at(camera_focus)
 	var strike_direction := _strike_direction()
 	aim_line.position = player_pos + strike_direction * 1.5 + Vector3(0, 0.05, 0)

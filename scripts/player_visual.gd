@@ -19,6 +19,7 @@ const SOLE_LOCAL_CENTER := Vector3(0.0, -0.052, -0.055)
 var _sole_planting := false
 var _sole_plant_basis := Basis.IDENTITY
 var head_pivot: Node3D
+var _celebration_start: Array[Quaternion] = []
 
 func build(player: Node3D) -> void:
 	player.body_visual = Node3D.new()
@@ -115,6 +116,8 @@ func build(player: Node3D) -> void:
 	player.name_label.no_depth_test = true
 
 func animate(player: Node3D, delta: float) -> void:
+	if not _celebration_start.is_empty():
+		_celebration_start.clear()
 	var previous_leg_rotation: Quaternion = player.right_leg.quaternion
 	var previous_knee_rotation: Quaternion = right_knee.quaternion
 	var previous_left_leg_rotation: Quaternion = player.left_leg.quaternion
@@ -239,6 +242,18 @@ func animate(player: Node3D, delta: float) -> void:
 	_sole_planting = sole_stopping
 	if player.throw_in_phase >= 0.0:
 		_pose_throw_in(player, player.throw_in_phase)
+
+
+func pose_celebration(_player: Node3D, elapsed: float) -> void:
+	# The match pauses the actor, so blend from the last on-pitch arm pose.
+	if _celebration_start.is_empty() or elapsed <= 0.0:
+		_celebration_start = [left_arm.quaternion, right_arm.quaternion, left_elbow.quaternion, right_elbow.quaternion]
+	var left_raise := smoothstep(0.0, 0.40, elapsed) * (1.0 - smoothstep(0.86, 1.50, elapsed))
+	var right_raise := smoothstep(0.08, 0.48, elapsed) * (1.0 - smoothstep(0.94, 1.58, elapsed))
+	left_arm.quaternion = _celebration_start[0].slerp(Quaternion.from_euler(Vector3(2.22, 0.0, -0.64)), left_raise)
+	right_arm.quaternion = _celebration_start[1].slerp(Quaternion.from_euler(Vector3(2.38, 0.0, 0.54)), right_raise)
+	left_elbow.quaternion = _celebration_start[2].slerp(Quaternion.from_euler(Vector3(0.48, 0.0, 0.0)), left_raise)
+	right_elbow.quaternion = _celebration_start[3].slerp(Quaternion.from_euler(Vector3(0.56, 0.0, 0.0)), right_raise)
 
 
 func throw_in_hand_center(_player: Node3D) -> Vector3:

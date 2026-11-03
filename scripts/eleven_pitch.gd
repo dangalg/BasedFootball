@@ -6,6 +6,8 @@ const HALF_WIDTH: float = 32.0
 const GOAL_HALF_WIDTH: float = 3.66
 const CROSSBAR_HEIGHT: float = 2.44
 const GOAL_DEPTH: float = 2.1
+const NET_COLLISION_LAYER := 2
+const NET_COLLISION_THICKNESS := 0.12
 const LINE_WIDTH: float = 0.10
 const LINE_Y: float = 0.012
 const PENALTY_DEPTH: float = 16.5
@@ -99,6 +101,44 @@ static func _goal(pitch: Node3D, side: float, paint: Material) -> void:
 	var roof := FootballArt.net(pitch, Vector2(GOAL_DEPTH, outside_width),
 		Vector3(middle, CROSSBAR_HEIGHT, 0.0), 0.0)
 	roof.rotation.x = -PI * 0.5
+	_net_collision(pitch, side, back, middle, post_center, outside_width)
+
+
+static func _net_collision(pitch: Node3D, side: float, back: float, middle: float,
+		post_center: float, outside_width: float) -> void:
+	var net := StaticBody3D.new()
+	net.name = "LeftGoalNet" if side < 0.0 else "RightGoalNet"
+	net.collision_layer = 0
+	net.collision_mask = 0
+	net.set_collision_layer_value(NET_COLLISION_LAYER, true)
+	var surface := PhysicsMaterial.new()
+	# Cancel the ball's restitution so the back net collects hard shots.
+	surface.absorbent = true
+	surface.bounce = 0.48
+	surface.rough = true
+	surface.friction = 0.9
+	net.physics_material_override = surface
+	pitch.add_child(net)
+	var thickness := NET_COLLISION_THICKNESS
+	var height := CROSSBAR_HEIGHT + thickness
+	var depth := GOAL_DEPTH + thickness
+	var depth_center := middle + side * thickness * 0.5
+	_net_shape(net, Vector3(thickness, height, outside_width),
+		Vector3(back + side * thickness * 0.5, height * 0.5, 0.0))
+	for edge in [-1.0, 1.0]:
+		_net_shape(net, Vector3(depth, height, thickness),
+			Vector3(depth_center, height * 0.5, float(edge) * (post_center + thickness * 0.5)))
+	_net_shape(net, Vector3(depth, thickness, outside_width),
+		Vector3(depth_center, CROSSBAR_HEIGHT + thickness * 0.5, 0.0))
+
+
+static func _net_shape(net: StaticBody3D, size: Vector3, center: Vector3) -> void:
+	var shape := BoxShape3D.new()
+	shape.size = size
+	var collider := CollisionShape3D.new()
+	collider.shape = shape
+	collider.position = center
+	net.add_child(collider)
 
 
 static func _corner_flag(pitch: Node3D, end: float, side: float, pole: Material) -> void:
