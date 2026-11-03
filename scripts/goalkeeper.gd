@@ -52,10 +52,10 @@ func _ready() -> void:
 	save_hand_target = grip_target
 
 func _field_direction() -> Vector3:
-	return Vector3.RIGHT if team == 0 else Vector3.LEFT
+	return Vector3.RIGHT * attack_sign()
 
 func _own_side() -> float:
-	return -1.0 if team == 0 else 1.0
+	return -attack_sign()
 
 func area_contains(point: Vector3) -> bool:
 	var depth := point.x * _own_side()

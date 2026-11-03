@@ -41,8 +41,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			# reconsider immediately after the boot touches it.
 			player.reaction_timer = 0.0
 			if gap < 1.6:
-				var attack_sign := 1.0 if player.team == 0 else -1.0
-				var exit := _eleven_carry_direction(ball.global_position, players, player.team, attack_sign)
+				var exit := _eleven_carry_direction(ball.global_position, players, player.team, player.attack_sign())
 				var exit_space := _space_at(ball.global_position + exit * 2.0, players, player.team, 0.25)
 				player.receive_exit_direction = exit if exit_space > 1.5 else Vector3.ZERO
 		if gap < 1.45:
@@ -80,7 +79,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		if closing > 1.5 and time_to_hit > 0.06 and time_to_hit < player.ai_rng.randf_range(0.22, 0.40) and confidence < clampf(0.62 * player.agility_skill * player.energy, 0.25, 0.85):
 			if player.hop():
 				return "hop_attempt"
-	var attack := 1.0 if player.team == 0 else -1.0
+	var attack := player.attack_sign()
 	var goal := Vector3(attack * (ELEVEN_HALF_LENGTH if eleven else 18.8), 0.28, 0)
 	var nearest: FootballPlayer = null
 	var nearest_distance := INF
@@ -276,7 +275,7 @@ static func _queue_pass(player: FootballPlayer, ball: FootballBall, options: Dic
 # current positions, velocities and actual-contact history; there is no input
 # prediction, possession grant, successful-pass roll or selected-player bonus.
 static func evaluate_options(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, eleven: bool = false) -> Dictionary:
-	var attack := 1.0 if player.team == 0 else -1.0
+	var attack := player.attack_sign()
 	var origin := ball.global_position
 	var goal := Vector3(attack * (ELEVEN_HALF_LENGTH if eleven else 18.8), FootballBall.RADIUS, 0)
 	var carrier_space := _space_at(player.global_position, players, player.team)
@@ -345,7 +344,7 @@ static func evaluate_options(player: FootballPlayer, players: Array[FootballPlay
 		"strike_reachable": strike_reachable, "can_pass": not best_pass.is_empty() and settle_remaining <= 0 and cooldown_remaining <= 0 and strike_reachable and player.kick_cooldown <= 0}
 
 static func _pass_option(passer: FootballPlayer, receiver: FootballPlayer, players: Array[FootballPlayer], origin: Vector3, target: Vector3, kind: String, receiver_distance: float, lead_seconds: float, carrier_space: float, receive_age: float, eleven: bool) -> Dictionary:
-	var attack := 1.0 if passer.team == 0 else -1.0
+	var attack := passer.attack_sign()
 	var distance := _flat(target - origin).length()
 	var speed := clampf(distance * 1.3, 7.0, 14.0)
 	var lane := _lane_clearance(origin, target, speed, players, passer.team)
@@ -462,7 +461,7 @@ static func _eleven_shape_target(player: FootballPlayer, players: Array[Football
 	return mark
 
 static func choose_called_runner(carrier: FootballPlayer, players: Array[FootballPlayer], aim: Vector3) -> FootballPlayer:
-	var attack := Vector3.RIGHT if carrier.team == 0 else Vector3.LEFT
+	var attack := Vector3.RIGHT * carrier.attack_sign()
 	var requested := _flat(aim).normalized()
 	if requested.dot(attack) < 0.2:
 		requested = attack

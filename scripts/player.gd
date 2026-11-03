@@ -27,6 +27,7 @@ const STEER_MAX_ROTATION := PI / 9.0 # At most 20 degrees per real contact.
 const STEER_PREPARE_LEAD := 0.055
 
 var team: int = 0
+var ends_swapped := false
 var player_id: String = ""
 var player_name: String = ""
 var shirt_number: int = 7
@@ -475,6 +476,10 @@ func hop() -> bool:
 	energy = maxf(0, energy - 0.025)
 	physical_event.emit("hop", {})
 	return true
+
+func attack_sign() -> float:
+	var initial := 1.0 if team == 0 else -1.0
+	return -initial if ends_swapped else initial
 
 func upright_ready() -> bool:
 	return ragdoll == null and not hop_active and action_kind == "" and recovery_remaining <= 0 and stagger_remaining <= 0 and throw_in_phase < 0.0
@@ -992,7 +997,7 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 	action_kind = kind
 	dribble_active = false
 	receiving_active = false
-	action_direction = aim.normalized() if aim.length_squared() > 0.01 else Vector3.RIGHT
+	action_direction = aim.normalized() if aim.length_squared() > 0.01 else Vector3.RIGHT * attack_sign()
 	action_elapsed = 0.0
 	action_duration = duration
 	action_ball = ball

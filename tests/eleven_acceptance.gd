@@ -17,7 +17,6 @@ class ControllerDriver extends Node:
 	var movement := Vector2.ZERO
 	var sprinting := false
 	var actions: Dictionary = {}
-	var goal_x := 0.0
 	var think_in := 0.0
 	var release_in := 0.0
 	var switch_in := 0.0
@@ -50,6 +49,7 @@ class ControllerDriver extends Node:
 		var desired := Vector2(offset.x, offset.z)
 		sprinting = desired.length() > 2.5
 		if game._attacking_contact():
+			var goal_x := 48.5 * actor.attack_sign()
 			desired = Vector2(goal_x - actor.global_position.x, -actor.global_position.z)
 			sprinting = false
 			if desired.length() < 11.0 and actor.kick_cooldown <= 0.0 and not game.charging:
@@ -60,7 +60,7 @@ class ControllerDriver extends Node:
 				for teammate: FootballPlayer in game.home_outfield:
 					var line := teammate.global_position - actor.global_position
 					var gap := Vector2(line.x, line.z).length()
-					if line.x > 3.0 and gap < best_gap:
+					if line.x * actor.attack_sign() > 3.0 and gap < best_gap:
 						best_gap = gap
 						desired = Vector2(line.x, line.z)
 						actions["pass"] = true
@@ -94,6 +94,8 @@ var _throw_entry_check := false
 var _throw_fixture_sent := false
 var _throw_serial := -1
 var _throw_tracking: Dictionary = {}
+var _opening_kickoff_team := 0
+var _halftime: Dictionary = {}
 
 
 func _initialize() -> void:
@@ -148,15 +150,13 @@ func _start() -> void:
 			_menu_settings["formation"] = int(_game.home_formation)
 			_formation_opening = _measure_opening_formation()
 	if "--away-kickoff" in arguments:
+		_opening_kickoff_team = 1
 		_game.action_log.clear()
 		_game.reset_positions(1)
 	_throw_entry_check = "--throw-entry" in arguments
 	_initial_shape = [_spread(_game.home_outfield), _spread(_game.away_outfield)]
 	_driver = ControllerDriver.new()
 	_driver.game = _game
-	for keeper: FootballPlayer in _game.keepers:
-		if keeper.team == 1:
-			_driver.goal_x = keeper.global_position.x
 	for index in range(_game.players.size()):
 		var player: FootballPlayer = _game.players[index]
 		player.ai_rng.seed = SEED + index
@@ -288,7 +288,13 @@ func _observe_restarts() -> void:
 		var kind: String = event["kind"]
 		if kind in RESTARTS:
 			_restarts.append({"kind": kind, "team": event["team"], "time": event["time"],
-				"start_frame": _frames, "taken_frame": 0, "resumed_frame": 0})
+				"start_frame": _frames, "taken_frame": 0, "resumed_frame": 0,
+				"home_attack_sign": _game.controlled.attack_sign()})
+		elif kind == "half_time":
+			_halftime["interval"] = event.duplicate(true)
+			_halftime["interval_frame"] = _frames
+		elif kind == "half_started" and int(event.get("half", 0)) == 2:
+			_record_second_half(event)
 		elif kind == "restart_taken" and not _restarts.is_empty():
 			var restart_event: Dictionary = _restarts.back()
 			if event.get("restart") == restart_event["kind"]:
@@ -303,13 +309,52 @@ func _observe_restarts() -> void:
 			var kickoff: Dictionary = _restarts.back()
 			if kickoff["kind"] == "kickoff" and kickoff["team"] == event["team"]:
 				kickoff["taken_frame"] = _frames
-				kickoff["backward_contact"] = float(event["direction"][0]) > 0.0 and event.has("touch_serial")
+				var backward_sign := float(kickoff["home_attack_sign"]) * (1.0 if event["team"] == 1 else -1.0)
+				kickoff["backward_contact"] = _backward_kickoff(event, backward_sign)
 	if _restarts.is_empty() or _game.kickoff_remaining > 0.0 or is_instance_valid(_game.kickoff_taker) or not _game.restart.is_empty() or _game.ball.freeze:
 		return
 	var current: Dictionary = _restarts.back()
 	var time := _match_seconds - float(_game.remaining)
 	if current["resumed_frame"] == 0 and time > float(current["time"]) + 0.03:
 		current["resumed_frame"] = _frames
+
+
+func _backward_kickoff(event: Dictionary, backward_sign: float) -> bool:
+	var serial := int(event.get("touch_serial", -1))
+	if serial < 0 or float(event["direction"][0]) * backward_sign <= 0.0:
+		return false
+	var ball: FootballBall = _game.ball
+	for entry in ball.impulse_audit:
+		if entry["serial"] == serial and entry["player_id"] == event["player"]:
+			return float(entry["impulse"][0]) * backward_sign > 0.0
+	return false
+
+
+func _record_second_half(event: Dictionary) -> void:
+	_halftime["second_half_count"] = int(_halftime.get("second_half_count", 0)) + 1
+	var players_swapped := true
+	var keepers_swapped := true
+	var outfield_in_own_half := true
+	var keeper_x: Array[float] = [0.0, 0.0]
+	for player: FootballPlayer in _game.players:
+		var own_side := 1.0 if player.team == 0 else -1.0
+		var depth := player.global_position.x * own_side
+		players_swapped = players_swapped and player.ends_swapped and player.attack_sign() == -own_side
+		if player.is_goalkeeper:
+			keepers_swapped = keepers_swapped and depth >= 44.0
+			keeper_x[player.team] = player.global_position.x
+		else:
+			# An automatic taker may take its stance on the other side of the spot.
+			outfield_in_own_half = outfield_in_own_half and (depth >= 0.0 or (player == _game.kickoff_taker and depth >= -1.0))
+	var ball_position: Vector3 = _game.ball.global_position
+	_halftime["second_half"] = event.duplicate(true)
+	_halftime["second_half_frame"] = _frames
+	_halftime["score_at_second_half"] = _game.scores.duplicate()
+	_halftime["players_swapped"] = players_swapped
+	_halftime["keepers_swapped"] = keepers_swapped
+	_halftime["keepers_x_m"] = keeper_x
+	_halftime["outfield_in_own_half"] = outfield_in_own_half
+	_halftime["ball_at_centre"] = FootballReception.flat(ball_position).length() <= 0.25
 
 
 func _finish() -> void:
@@ -321,6 +366,7 @@ func _finish() -> void:
 	var stalled_restarts: Array[Dictionary] = []
 	var away_kickoffs := 0
 	var backward_kickoffs := 0
+	var second_half_kickoff: Dictionary = {}
 	var latest_time := _match_seconds - float(_game.remaining)
 	for event: Dictionary in _game.action_log:
 		var kind: String = event["kind"]
@@ -338,11 +384,16 @@ func _finish() -> void:
 			away_kickoffs += 1
 			if restart_event.get("backward_contact", false):
 				backward_kickoffs += 1
+		if restart_event["kind"] == "kickoff" and restart_event["team"] == 1 - _opening_kickoff_team and restart_event["home_attack_sign"] == -1.0 and absf(float(restart_event["time"]) - _match_seconds * 0.5) <= 0.05:
+			second_half_kickoff = restart_event
 		if float(restart_event["time"]) >= _match_seconds - 0.5 and _game.phase == "finished":
 			continue
 		if restart_event["resumed_frame"] == 0 or (restart_event["kind"] != "kickoff" and restart_event["taken_frame"] == 0):
 			stalled_restarts.append(restart_event)
 	var minimum_samples := maxi(1, _shape_samples)
+	var interval: Dictionary = _halftime.get("interval", {})
+	var second_half: Dictionary = _halftime.get("second_half", {})
+	_halftime["kickoff"] = second_half_kickoff
 	var checks := {
 		"full_time": _game.phase == "finished" and is_zero_approx(float(_game.remaining)) and counts.get("full_time", 0) == 1,
 		"roster_at_full_time": _measure_roster()["valid"],
@@ -355,6 +406,10 @@ func _finish() -> void:
 		"restart_clock_progression": not _restarts.is_empty() and stalled_restarts.is_empty(),
 		"away_kickoff_contact": away_kickoffs == backward_kickoffs and (away_kickoffs > 0 or not "--away-kickoff" in OS.get_cmdline_user_args()),
 		"isolated_save": _game.squad.save_path == SAVE_PATH and _game.squad.last_error.is_empty(),
+		"one_halftime_at_midpoint": counts.get("half_time", 0) == 1 and _halftime.get("second_half_count", 0) == 1 and absf(float(interval.get("time", -1.0)) - _match_seconds * 0.5) <= 0.05,
+		"second_half_preserved_score": not interval.is_empty() and interval.get("score", []) == _halftime.get("score_at_second_half", [-1, -1]),
+		"second_half_swapped_ends": second_half.get("half", 0) == 2 and second_half.get("home_attack_sign", 0) == -1 and _halftime.get("players_swapped", false) and _halftime.get("keepers_swapped", false) and _halftime.get("outfield_in_own_half", false) and _halftime.get("ball_at_centre", false),
+		"second_half_kickoff_resumed": second_half.get("kickoff_team", -1) == 1 - _opening_kickoff_team and int(second_half_kickoff.get("resumed_frame", 0)) > 0 and (_opening_kickoff_team == 1 or second_half_kickoff.get("backward_contact", false)),
 	}
 	if _throw_entry_check:
 		var entry_receiver: String = _throw_tracking.get("entry_receiver", "")
@@ -368,6 +423,7 @@ func _finish() -> void:
 		"score": _game.scores, "match_time_s": latest_time, "physics_frames": _frames,
 		"menu_settings": _menu_settings,
 		"formation_opening": _formation_opening,
+		"halftime": _halftime,
 		"throw_entry_tracking": _throw_tracking,
 		"wall_time_ms": Time.get_ticks_msec() - _started_at, "controller_decisions": _driver.decisions,
 		"event_counts": counts, "event_counts_by_team": by_team, "restarts": _restarts, "stalled_restarts": stalled_restarts,

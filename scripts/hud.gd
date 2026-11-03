@@ -43,7 +43,9 @@ func _ready() -> void:
 	scoreboard = _label(score_panel, "0  :  0", 28, PAPER, Vector2(98, 4))
 	scoreboard.size.x = 140
 	scoreboard.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	timer_label = _label(score_panel, "03:00", 15, GOLD, Vector2(138, 43))
+	timer_label = _label(score_panel, "03:00", 15, GOLD, Vector2(98, 43))
+	timer_label.size.x = 140
+	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var rules := _panel(root, Vector2(1184, 22), Vector2(232, 60))
 	_label(rules, "ONE BALL. SAME RULES.", 15, PAPER, Vector2(16, 10))
 	_label(rules, "Throw-ins  /  Corners" if eleven_a_side else "Keepers  /  Rebound boards", 12, MUTED, Vector2(16, 35))
@@ -132,10 +134,12 @@ func _label(parent: Control, value: String, size: int, color: Color, pos: Vector
 	parent.add_child(label)
 	return label
 
-func update_match(scores: Array[int], remaining: float, player: FootballPlayer, charge: float) -> void:
+func update_match(scores: Array[int], remaining: float, player: FootballPlayer, charge: float, half: int = 0) -> void:
 	scoreboard.text = "%d  :  %d" % [scores[0], scores[1]]
 	var seconds := int(ceil(remaining))
 	timer_label.text = "%02d:%02d" % [seconds / 60, seconds % 60]
+	if half > 0:
+		timer_label.text = "%dH  %s" % [half, timer_label.text]
 	selected_number.text = "%02d" % player.shirt_number
 	player_label.text = "%s / %s" % [player.player_name, player.role.to_upper()]
 	energy_bar.value = player.energy * 100

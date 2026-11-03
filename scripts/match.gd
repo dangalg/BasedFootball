@@ -6,6 +6,7 @@ const DURATION := 180.0
 const SHOT_BUFFER_SECONDS := 0.18
 const PASS_CALL_SECONDS := 1.8
 const TEAM_PRESS_RANGE := 12.0
+const HALFTIME_SECONDS := 3.0
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -51,6 +52,9 @@ var remaining: float = DURATION
 var match_duration: float = DURATION
 var opponent_difficulty := 1
 var home_formation := 0
+var ends_swapped := false
+var halftime_remaining := 0.0
+var opening_kickoff_team := 0
 var match_menu: ElevenMatchMenu
 var kickoff_remaining: float = 1.5
 var kickoff_taker: FootballPlayer
@@ -156,6 +160,7 @@ func _start_configured_match(seconds: float, difficulty: int, formation: int) ->
 	match_duration = seconds if seconds in [180.0, 360.0, 600.0] else DURATION
 	opponent_difficulty = clampi(difficulty, 0, 2)
 	home_formation = clampi(formation, 0, ELEVEN_FORMATIONS.size() - 1)
+	_set_ends_swapped(false)
 	var anchors: Array = ELEVEN_FORMATIONS[home_formation]
 	for player in home_outfield:
 		var anchor: Vector2 = anchors[player.eleven_slot]
@@ -378,6 +383,8 @@ func reset_positions(kickoff_team: int) -> void:
 	throw_entry_time = 0.0
 	kickoff_taker = null
 	kickoff_receiver = null
+	if not ends_swapped and is_equal_approx(remaining, match_duration):
+		opening_kickoff_team = kickoff_team
 	restart.clear()
 	ball.freeze = false
 	for keeper: FootballPlayer in keepers:
@@ -387,7 +394,7 @@ func reset_positions(kickoff_team: int) -> void:
 		var player := players[i]
 		var field: Array[FootballPlayer] = home_outfield if player.team == 0 else away_outfield
 		var index: int = field.find(player)
-		var side := -1.0 if player.team == 0 else 1.0
+		var side := -player.attack_sign()
 		var pos: Vector3
 		if eleven_a_side:
 			pos = Vector3(side * 48.5, 0.06, 0) if player.is_goalkeeper else player.eleven_home
@@ -431,7 +438,8 @@ func reset_positions(kickoff_team: int) -> void:
 func _prepare_away_kickoff() -> void:
 	kickoff_taker = away_outfield[0]
 	kickoff_receiver = away_outfield[5]
-	kickoff_receiver.global_position = Vector3(7.0, 0.06, 2.6)
+	var own_side := -kickoff_taker.attack_sign()
+	kickoff_receiver.global_position = Vector3(7.0 * own_side, 0.06, 2.6 * own_side)
 	kickoff_receiver.reset_physics_interpolation()
 	var direction := FootballReception.flat(kickoff_receiver.global_position).normalized()
 	kickoff_taker.global_position = Vector3.UP * 0.06 - direction * 0.55
@@ -503,7 +511,43 @@ func _switch_player(direction: Vector3 = Vector3.ZERO) -> void:
 	_select(winner)
 	_record("switch", controlled, {"source": "controller"})
 
+func _set_ends_swapped(swapped: bool) -> void:
+	if ends_swapped == swapped:
+		return
+	ends_swapped = swapped
+	for player in players:
+		player.ends_swapped = swapped
+		player.eleven_home *= Vector3(-1.0, 1.0, -1.0)
+
+func _begin_halftime() -> void:
+	phase = "halftime"
+	halftime_remaining = HALFTIME_SECONDS
+	_set_pressure_teammate(null)
+	charging = false
+	charge = 0.0
+	_pause_players()
+	ball.freeze = true
+	sound.play_event("whistle")
+	hud.show_overlay("HALF TIME  /  %d : %d" % [scores[0], scores[1]], "Teams switch ends. Blue attacks left in the second half.", "SECOND HALF STARTS AUTOMATICALLY")
+	_record("half_time", null, {"score": scores.duplicate()})
+
+func _tick_halftime(delta: float) -> void:
+	halftime_remaining -= delta
+	if halftime_remaining > 0.0:
+		return
+	_resume_players()
+	_set_ends_swapped(true)
+	var kickoff_team := 1 - opening_kickoff_team
+	reset_positions(kickoff_team)
+	phase = "playing"
+	hud.overlay.hide()
+	hud.flash("SECOND HALF  /  BLUE ATTACKS LEFT", 3.0)
+	_record("half_started", null, {"half": 2, "score": scores.duplicate(), "home_attack_sign": controlled.attack_sign(), "kickoff_team": kickoff_team})
+
 func _physics_process(delta: float) -> void:
+	if phase == "halftime":
+		_tick_halftime(delta)
+		return
 	if phase != "playing":
 		return
 	if not restart.is_empty():
@@ -518,6 +562,10 @@ func _physics_process(delta: float) -> void:
 		_tick_away_kickoff(delta)
 		return
 	remaining = maxf(0, remaining - delta)
+	if eleven_a_side and not ends_swapped and remaining <= match_duration * 0.5:
+		remaining = match_duration * 0.5
+		_begin_halftime()
+		return
 	pass_call_remaining = maxf(0.0, pass_call_remaining - delta) if ball.last_touch_team == controlled.team else 0.0
 	reception.update(self,delta)
 	if decision_driver != null:
@@ -630,7 +678,7 @@ func _send_teammate_run() -> void:
 		called_runner.called_run_remaining = 0.0
 	called_runner = runner
 	var origin := runner.global_position
-	runner.called_run_target = Vector3(minf(origin.x + 8.0, 48.0), origin.y, origin.z)
+	runner.called_run_target = Vector3(clampf(origin.x + 8.0 * runner.attack_sign(), -48.0, 48.0), origin.y, origin.z)
 	runner.called_run_remaining = 1.65
 	_record("run_called", runner, {"target": _vec(runner.called_run_target)})
 	hud.flash(runner.player_name.to_upper() + " MAKES A RUN", 1.3)
@@ -832,7 +880,7 @@ func _check_goal() -> void:
 	var mouth := ElevenPitch.GOAL_HALF_WIDTH if eleven_a_side else 2.21
 	var bar := ElevenPitch.CROSSBAR_HEIGHT if eleven_a_side else 2.31
 	if absf(ball.global_position.x) > line + FootballBall.RADIUS and absf(ball.global_position.x) < line + 2.2 and absf(ball.global_position.z) < mouth - FootballBall.RADIUS and ball.global_position.y < bar - FootballBall.RADIUS:
-		var scoring := 0 if ball.global_position.x > 0 else 1
+		var scoring := 0 if ball.global_position.x * keepers[0].attack_sign() > 0 else 1
 		scores[scoring] += 1
 		_record("goal", null, {"team": scoring, "ball": _vec(ball.global_position)})
 		sound.play_event("goal")
@@ -851,7 +899,7 @@ func _check_eleven_boundary(delta: float) -> void:
 		var spot := Vector3(clampf(point.x, -49.5, 49.5), radius, signf(point.z) * 31.85)
 		_begin_restart("throw_in", 1 if ball.last_touch_team == 0 else 0, spot)
 	elif absf(point.x) > ElevenPitch.HALF_LENGTH + radius:
-		var defender := 0 if point.x < 0 else 1
+		var defender := 0 if point.x * keepers[0].attack_sign() < 0 else 1
 		if ball.last_touch_team == defender:
 			_begin_restart("corner", 1 - defender, Vector3(signf(point.x) * 49.65, radius, 31.65 if point.z >= 0.0 else -31.65))
 		else:
@@ -1037,6 +1085,7 @@ func _finish_match() -> void:
 	match_finished.emit()
 
 func rematch() -> void:
+	_set_ends_swapped(false)
 	remaining = match_duration
 	action_log.clear()
 	scores = [0, 0]
@@ -1062,26 +1111,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			charging = false
 			charge = 0.0
 			shot_buffer_remaining = 0.0
-			pause_states.clear()
-			for player in players:
-				_pause_node(player)
-				if player.ragdoll != null:
-					_pause_node(player.ragdoll)
-					for body in player.ragdoll.bodies:
-						_pause_node(body)
+			_pause_players()
 			ball.freeze = true
 			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
 			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
-			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks right." + runs, "Options / Esc  RESUME     •     Q  EXIT")
+			var attack_side := "left" if ends_swapped else "right"
+			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks %s." % attack_side + runs, "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
 			phase = "playing"
-			for saved in pause_states:
-				var node: Node = saved.node
-				if is_instance_valid(node):
-					node.set_physics_process(saved.physics)
-					if node is RigidBody3D:
-						node.freeze = saved.freeze
-			pause_states.clear()
+			_resume_players()
 			ball.freeze = false
 			hud.overlay.hide()
 	elif phase == "finished" and eleven_a_side and event.is_action_pressed("match_setup"):
@@ -1090,6 +1128,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		rematch()
 	elif phase != "playing" and event.is_action_pressed("quit"):
 		get_tree().quit()
+
+func _pause_players() -> void:
+	pause_states.clear()
+	for player in players:
+		_pause_node(player)
+		if player.ragdoll != null:
+			_pause_node(player.ragdoll)
+			for body in player.ragdoll.bodies:
+				_pause_node(body)
+
+func _resume_players() -> void:
+	for saved in pause_states:
+		var node: Node = saved.node
+		if is_instance_valid(node):
+			node.set_physics_process(saved.physics)
+			if node is RigidBody3D:
+				node.freeze = saved.freeze
+	pause_states.clear()
 
 func _pause_node(node: Node) -> void:
 	pause_states.append({"node": node, "physics": node.is_physics_processing(), "freeze": node.freeze if node is RigidBody3D else false})
@@ -1118,7 +1174,7 @@ func _process(delta: float) -> void:
 	aim_line.position = player_pos + strike_direction * 1.5 + Vector3(0, 0.05, 0)
 	aim_line.rotation.y = atan2(strike_direction.x, strike_direction.z)
 	aim_line.visible = phase == "playing"
-	hud.update_match(scores, remaining, controlled, charge)
+	hud.update_match(scores, remaining, controlled, charge, (2 if ends_swapped else 1) if eleven_a_side else 0)
 	if hud.radar != null:
 		hud.radar.update_positions(players, ball, controlled)
 	var devices := Input.get_connected_joypads()
