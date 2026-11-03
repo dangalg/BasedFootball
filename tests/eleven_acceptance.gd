@@ -2,6 +2,7 @@ extends SceneTree
 
 ## Launch with --script res://tests/eleven_acceptance.gd -- --eleven-acceptance
 ## Optional --report=<absolute JSON path> preserves the full event log.
+## --menu-acceptance --formation-acceptance selects 4-4-2 before kickoff.
 
 const SCENE_PATH := "res://scenes/eleven_match.tscn"
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
@@ -75,6 +76,7 @@ var _sample_interval := 0
 var _started_at := 0
 var _match_seconds := MATCH_SECONDS
 var _menu_settings: Dictionary = {}
+var _formation_opening: Dictionary = {}
 var _finite := true
 var _shape_samples := 0
 var _initial_shape: Array[Vector2] = []
@@ -106,6 +108,10 @@ func _start() -> void:
 	if "--eleven-acceptance" not in arguments:
 		_abort("Pass -- --eleven-acceptance to isolate career data.")
 		return
+	var check_formation := "--formation-acceptance" in arguments
+	if check_formation and not "--menu-acceptance" in arguments:
+		_abort("Pass --menu-acceptance to exercise the formation selector.")
+		return
 	var scene := load(SCENE_PATH) as PackedScene
 	if scene == null:
 		_abort("Could not load the eleven-a-side match scene.")
@@ -130,12 +136,17 @@ func _start() -> void:
 			return
 		menu.length_choice.select(1)
 		menu.difficulty_choice.select(2)
+		if check_formation:
+			menu.formation_choice.select(1)
 		menu.kickoff_button.pressed.emit()
 		if _game.phase != "playing" or _game.match_menu != null or _game.ball.freeze or _game.remaining != 360.0 or _game.opponent_difficulty != 2:
 			_abort("The kickoff action did not apply the selected settings.")
 			return
 		_match_seconds = float(_game.match_duration)
 		_menu_settings = {"duration": _match_seconds, "difficulty": int(_game.opponent_difficulty)}
+		if check_formation:
+			_menu_settings["formation"] = int(_game.home_formation)
+			_formation_opening = _measure_opening_formation()
 	if "--away-kickoff" in arguments:
 		_game.action_log.clear()
 		_game.reset_positions(1)
@@ -158,6 +169,29 @@ func _start() -> void:
 	_started_at = Time.get_ticks_msec()
 	physics_frame.connect(_observe)
 	print("ELEVEN_ACCEPTANCE_STARTED seed=%d roster=%s" % [SEED, JSON.stringify(_roster)])
+
+
+func _measure_opening_formation() -> Dictionary:
+	var home := _opening_depths(_game.home_outfield, -1.0)
+	var away := _opening_depths(_game.away_outfield, 1.0)
+	# The home kickoff taker stands at 0.8 m rather than on the formation anchor.
+	var home_anchors := [8.0, 8.0, 22.0, 22.0, 22.0, 22.0, 34.0, 34.0, 37.0, 37.0]
+	var home_live := [0.8, 8.0, 22.0, 22.0, 22.0, 22.0, 34.0, 34.0, 37.0, 37.0]
+	var away_anchors := [6.0, 11.0, 11.0, 20.0, 20.0, 25.0, 34.0, 34.0, 37.0, 37.0]
+	var home_valid: bool = home["anchor_depths_m"] == home_anchors and home["live_depths_m"] == home_live
+	var away_valid: bool = away["anchor_depths_m"] == away_anchors and away["live_depths_m"] == away_anchors
+	return {"home_formation_selected": _game.home_formation == 1, "home_442": home_valid, "away_433": away_valid, "home": home, "away": away}
+
+
+func _opening_depths(field: Array, side: float) -> Dictionary:
+	var anchors: Array[float] = []
+	var live: Array[float] = []
+	for player: FootballPlayer in field:
+		anchors.append(snappedf(player.eleven_home.x * side, 0.01))
+		live.append(snappedf(player.global_position.x * side, 0.01))
+	anchors.sort()
+	live.sort()
+	return {"anchor_depths_m": anchors, "live_depths_m": live}
 
 
 func _measure_roster() -> Dictionary:
@@ -325,11 +359,15 @@ func _finish() -> void:
 	if _throw_entry_check:
 		var entry_receiver: String = _throw_tracking.get("entry_receiver", "")
 		checks["throw_receiver_tracks_into_play"] = not entry_receiver.is_empty() and _throw_tracking.get("outside_receiver") == entry_receiver and float(_throw_tracking.get("target_depth_m", 0.0)) > 2.0
+	if not _formation_opening.is_empty():
+		checks["home_442_applied_at_kickoff"] = _formation_opening["home_formation_selected"] and _formation_opening["home_442"]
+		checks["away_433_preserved_at_kickoff"] = _formation_opening["away_433"]
 	var passed := not checks.values().has(false)
 	var report := {
 		"status": "passed" if passed else "failed", "seed": SEED, "roster": _roster, "checks": checks,
 		"score": _game.scores, "match_time_s": latest_time, "physics_frames": _frames,
 		"menu_settings": _menu_settings,
+		"formation_opening": _formation_opening,
 		"throw_entry_tracking": _throw_tracking,
 		"wall_time_ms": Time.get_ticks_msec() - _started_at, "controller_decisions": _driver.decisions,
 		"event_counts": counts, "event_counts_by_team": by_team, "restarts": _restarts, "stalled_restarts": stalled_restarts,

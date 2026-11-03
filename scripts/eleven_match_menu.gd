@@ -1,9 +1,14 @@
 class_name ElevenMatchMenu
 extends Control
 
-signal kickoff_requested(seconds: float, difficulty: int)
+signal kickoff_requested(seconds: float, difficulty: int, formation: int)
 
 const MATCH_SECONDS: Array[float] = [180.0, 360.0, 600.0]
+const FORMATION_DESCRIPTIONS: Array[String] = [
+	"Three midfielders with a wide front three.",
+	"Two banks of four behind a pair of strikers.",
+	"Two deeper midfielders behind an attacking three.",
+]
 const INK := Color("12252c")
 const PAPER := Color("edf5ec")
 const MUTED := Color("aac2bc")
@@ -11,6 +16,8 @@ const GOLD := Color("e9c463")
 
 var length_choice: OptionButton
 var difficulty_choice: OptionButton
+var formation_choice: OptionButton
+var formation_detail: Label
 var kickoff_button: Button
 
 
@@ -37,6 +44,10 @@ func _ready() -> void:
 	contents.add_child(HSeparator.new())
 	length_choice = _add_choice(contents, "Match length", ["3 minutes", "6 minutes", "10 minutes"], 0)
 	difficulty_choice = _add_choice(contents, "Opponent difficulty", ["Relaxed", "Standard", "Competitive"], 1)
+	formation_choice = _add_choice(contents, "Formation", ["4-3-3", "4-4-2", "4-2-3-1"], 0)
+	formation_detail = _label(FORMATION_DESCRIPTIONS[0], 16, MUTED)
+	contents.add_child(formation_detail)
+	formation_choice.item_selected.connect(select_formation)
 
 	kickoff_button = Button.new()
 	kickoff_button.text = "Kick off"
@@ -50,8 +61,10 @@ func _ready() -> void:
 	length_choice.focus_neighbor_top = length_choice.get_path_to(kickoff_button)
 	length_choice.focus_neighbor_bottom = length_choice.get_path_to(difficulty_choice)
 	difficulty_choice.focus_neighbor_top = difficulty_choice.get_path_to(length_choice)
-	difficulty_choice.focus_neighbor_bottom = difficulty_choice.get_path_to(kickoff_button)
-	kickoff_button.focus_neighbor_top = kickoff_button.get_path_to(difficulty_choice)
+	difficulty_choice.focus_neighbor_bottom = difficulty_choice.get_path_to(formation_choice)
+	formation_choice.focus_neighbor_top = formation_choice.get_path_to(difficulty_choice)
+	formation_choice.focus_neighbor_bottom = formation_choice.get_path_to(kickoff_button)
+	kickoff_button.focus_neighbor_top = kickoff_button.get_path_to(formation_choice)
 	kickoff_button.focus_neighbor_bottom = kickoff_button.get_path_to(length_choice)
 	visibility_changed.connect(_focus_setup)
 	_focus_setup.call_deferred()
@@ -100,6 +113,9 @@ func _focus_setup() -> void:
 	if is_visible_in_tree():
 		length_choice.grab_focus()
 
+func select_formation(index: int) -> void:
+	formation_choice.select(index)
+	formation_detail.text = FORMATION_DESCRIPTIONS[index]
 
 func _request_kickoff() -> void:
-	kickoff_requested.emit(MATCH_SECONDS[length_choice.selected], difficulty_choice.selected)
+	kickoff_requested.emit(MATCH_SECONDS[length_choice.selected], difficulty_choice.selected, formation_choice.selected)

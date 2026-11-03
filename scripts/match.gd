@@ -13,6 +13,19 @@ const ELEVEN_ANCHORS: Array[Vector2] = [
 	Vector2(20, -12), Vector2(20, 12), Vector2(25, 0),
 	Vector2(34, -23), Vector2(37, -8), Vector2(37, 8), Vector2(34, 23),
 ]
+const ELEVEN_FORMATIONS := [
+	ELEVEN_ANCHORS,
+	[
+		Vector2(8, -7), Vector2(8, 7),
+		Vector2(22, -23), Vector2(22, -8), Vector2(22, 8), Vector2(22, 23),
+		Vector2(34, -23), Vector2(37, -8), Vector2(37, 8), Vector2(34, 23),
+	],
+	[
+		Vector2(7, 0), Vector2(16, -22), Vector2(16, 0), Vector2(16, 22),
+		Vector2(26, -8), Vector2(26, 8),
+		Vector2(34, -23), Vector2(37, -8), Vector2(37, 8), Vector2(34, 23),
+	],
+]
 @export var eleven_a_side := false
 var restart: Dictionary = {}
 var throw_entry_side := 0.0
@@ -37,6 +50,7 @@ var scores: Array[int] = [0, 0]
 var remaining: float = DURATION
 var match_duration: float = DURATION
 var opponent_difficulty := 1
+var home_formation := 0
 var match_menu: ElevenMatchMenu
 var kickoff_remaining: float = 1.5
 var kickoff_taker: FootballPlayer
@@ -133,18 +147,26 @@ func _show_match_setup() -> void:
 		player.freeze = true
 	match_menu = ElevenMatchMenu.new()
 	hud.add_child(match_menu)
+	match_menu.length_choice.select(ElevenMatchMenu.MATCH_SECONDS.find(match_duration))
+	match_menu.difficulty_choice.select(opponent_difficulty)
+	match_menu.select_formation(home_formation)
 	match_menu.kickoff_requested.connect(_start_configured_match)
 
-func _start_configured_match(seconds: float, difficulty: int) -> void:
+func _start_configured_match(seconds: float, difficulty: int, formation: int) -> void:
 	match_duration = seconds if seconds in [180.0, 360.0, 600.0] else DURATION
 	opponent_difficulty = clampi(difficulty, 0, 2)
+	home_formation = clampi(formation, 0, ELEVEN_FORMATIONS.size() - 1)
+	var anchors: Array = ELEVEN_FORMATIONS[home_formation]
+	for player in home_outfield:
+		var anchor: Vector2 = anchors[player.eleven_slot]
+		player.eleven_home = Vector3(-anchor.x, 0.06, anchor.y)
 	match_menu.hide()
 	match_menu.queue_free()
 	match_menu = null
 	for player: FootballPlayer in players:
 		player.freeze = false
 	rematch()
-	_record("match_configured", null, {"duration": match_duration, "difficulty": opponent_difficulty})
+	_record("match_configured", null, {"duration": match_duration, "difficulty": opponent_difficulty, "formation": home_formation})
 
 func _install_input() -> void:
 	for action in ["left", "right", "up", "down", "pass", "shoot", "lob", "through", "jockey", "tackle", "slide", "shoulder", "hop", "sprint", "switch", "pause", "confirm", "quit"]:
