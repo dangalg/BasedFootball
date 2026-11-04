@@ -7,6 +7,8 @@ const AREA_HALF_WIDTH := 4.2
 const CATCH_SPEED := 6.8
 const GRIP_MAX_FORCE := 70.0
 const GLOVE_RADIUS := FootballKeeperVisual.GLOVE_RADIUS
+const LOW_SAVE_LOOKAHEAD := 0.85
+const LOW_SAVE_REACH_AHEAD := 0.48
 
 var held_ball: FootballBall
 var keeper_state: String = "set"
@@ -101,7 +103,11 @@ func decide_keeper(all_players: Array[FootballPlayer], ball: FootballBall, delta
 			if threatens:
 				target.z = clampf(impact_z, -mouth + 0.25, mouth - 0.25)
 	var distance := global_position.distance_to(ball.global_position)
-	if area_contains(ball.global_position) and distance < 3.2 and ball.grip_holder_id.is_empty():
+	var low_intercept := _low_save_intercept(ball, target.x, mouth)
+	var low_save := low_intercept != Vector3.INF
+	if low_save:
+		target.z = clampf(low_intercept.z, -mouth + 0.15, mouth - 0.15)
+	elif area_contains(ball.global_position) and distance < 3.2 and ball.grip_holder_id.is_empty():
 		target = ball.global_position + ball.linear_velocity * minf(0.18, distance / 10.0) - forward * 0.45
 	if not area_contains(global_position):
 		target = Vector3(side * (line - 1.5), 0, clampf(global_position.z, -mouth, mouth))
@@ -113,7 +119,11 @@ func decide_keeper(all_players: Array[FootballPlayer], ball: FootballBall, delta
 	var offset := target - global_position
 	offset.y = 0
 	intent = offset.normalized() * clampf(offset.length() * 1.2, 0, 1) if offset.length() > 0.15 else Vector3.ZERO
-	sprint = threatens and offset.length() > 0.8 and energy > 0.25
+	sprint = (threatens or low_save) and offset.length() > (0.65 if low_save else 0.8) and energy > 0.25
+	if low_save:
+		save_hand_target = low_intercept
+		keeper_state = "low_save"
+		return ""
 	save_hand_target = ball.global_position + ball.linear_velocity * 0.06
 	var reachable_save := area_contains(global_position) and area_contains(ball.global_position) and distance < 2.2 and ball.global_position.y > 0.45 and ball.global_position.y < 2.15
 	if hand_cooldown <= 0:
@@ -137,6 +147,23 @@ func decide_keeper(all_players: Array[FootballPlayer], ball: FootballBall, delta
 			pending_receiver_id = receiver.player_id if receiver != null else ""
 			return "keeper_clear_attempt"
 	return ""
+
+func _low_save_intercept(ball: FootballBall, set_x: float, mouth: float) -> Vector3:
+	if not full_pitch or not upright_ready() or hand_cooldown > 0.0 or not area_contains(global_position) or not ball.grip_holder_id.is_empty():
+		return Vector3.INF
+	var velocity := ball.linear_velocity
+	var side := _own_side()
+	if velocity.x * side < 2.0 or absf(velocity.y) > 1.0 or ball.global_position.y > 0.42:
+		return Vector3.INF
+	# Set the gloves in front of the body, at the observed roll's crossing line.
+	var hand_x := set_x - side * LOW_SAVE_REACH_AHEAD
+	var arrival := (hand_x - ball.global_position.x) / velocity.x
+	if arrival < -0.04 or arrival > LOW_SAVE_LOOKAHEAD:
+		return Vector3.INF
+	var crossing_z := ball.global_position.z + velocity.z * maxf(0.0, arrival)
+	if absf(crossing_z) > mouth + FootballBall.RADIUS:
+		return Vector3.INF
+	return Vector3(hand_x, clampf(ball.global_position.y, FootballBall.RADIUS, 0.28), crossing_z)
 
 func _physics_process(delta: float) -> void:
 	super._physics_process(delta)
@@ -204,9 +231,12 @@ func _check_hand_contact() -> void:
 	var both_hands := maxf(hands[0].distance_to(ball.global_position), hands[1].distance_to(ball.global_position))
 	var can_catch := incoming.length() <= CATCH_SPEED and absf(incoming.y) <= 4.5 and both_hands <= radius + 0.025
 	save_attempt_diagnostics = {"distance": distance, "both_hands_distance": both_hands, "relative_speed": incoming.length(), "inside_area": true, "hand_contact": true}
+	save_attempt_diagnostics["ball_height"] = ball.global_position.y
+	save_attempt_diagnostics["pose"] = keeper_state
 	if can_catch:
 		held_ball = ball
 		ball.touch(team, player_id, Vector3.ZERO, Vector3.ZERO, "save")
+		save_attempt_diagnostics["touch_serial"] = ball.touch_serial
 		ball.grip_holder_id = player_id
 		ball.control_candidate_id = ""
 		grip_target = center
@@ -225,6 +255,7 @@ func _check_hand_contact() -> void:
 		var outgoing := normal * clampf(incoming.length() * 0.7, 4.0, 11.0) + Vector3.UP * 1.5
 		var impulse := ((outgoing - ball.linear_velocity) * ball.mass).limit_length(8.0)
 		ball.touch(team, player_id, impulse, Vector3.ZERO, "save")
+		save_attempt_diagnostics["touch_serial"] = ball.touch_serial
 		apply_central_impulse(-impulse)
 		parry_count += 1
 		hand_cooldown = 0.28

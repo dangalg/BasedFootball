@@ -10,6 +10,7 @@ var left_hand_target := Vector3.ZERO
 var right_hand_target := Vector3.ZERO
 var previous_body_position := Vector3.ZERO
 var hand_targets_initialized: bool = false
+var _low_stance := 0.0
 
 func build(player: Node3D) -> void:
 	super.build(player)
@@ -47,6 +48,8 @@ func animate(player: Node3D, delta: float) -> void:
 	# The base animation has already solved the boot's world-space kick path.
 	# Do not subsequently rotate its parent or replace its ordinary arm swing.
 	if keeper.action_kind == "kick":
+		_low_stance = 0.0
+		head_pivot.rotation.x = 0.0
 		_reset_hand_targets(keeper)
 		return
 	var facing := keeper.aim
@@ -56,12 +59,18 @@ func animate(player: Node3D, delta: float) -> void:
 		keeper.body_visual.rotation.y = lerp_angle(keeper.body_visual.rotation.y, atan2(-facing.x, -facing.z), minf(1.0, delta * 14.0))
 	var forward := -keeper.body_visual.global_basis.z.normalized()
 	var right := keeper.body_visual.global_basis.x.normalized()
+	var saving_low := keeper.keeper_state == "low_save"
+	_low_stance = move_toward(_low_stance, 1.0 if saving_low else 0.0, delta * (8.0 if saving_low else 4.5))
+	if _low_stance > 0.0 and keeper.action_kind.is_empty():
+		_pose_low_stance(keeper, forward, right)
+	else:
+		head_pivot.rotation.x = 0.0
 	var center := keeper.global_position + Vector3.UP * 1.12 + forward * 0.28
 	var separation := 0.23
 	if keeper.keeper_state in ["holding", "releasing"]:
 		center = keeper.grip_target
 		separation = FootballBall.RADIUS + 0.04
-	elif keeper.keeper_state in ["tracking", "lunge"]:
+	elif saving_low or keeper.keeper_state in ["tracking", "lunge"]:
 		center = keeper.save_hand_target
 		separation = FootballBall.RADIUS + 0.04
 	var body_displacement := keeper.global_position - previous_body_position
@@ -79,6 +88,17 @@ func animate(player: Node3D, delta: float) -> void:
 	previous_body_position = keeper.global_position
 	_pose_hand(left_arm, left_elbow, left_hand_target, -right, forward)
 	_pose_hand(right_arm, right_elbow, right_hand_target, right, forward)
+
+func _pose_low_stance(keeper: FootballGoalkeeper, forward: Vector3, right: Vector3) -> void:
+	# Get the shoulders down to the roll while both legs support the crouch.
+	keeper.body_visual.position.y = -0.59 * _low_stance
+	upper_body.rotation.x = lerpf(upper_body.rotation.x, -1.02, _low_stance)
+	head_pivot.rotation.x = -upper_body.rotation.x * 0.70
+	var ground := keeper.global_position
+	ground.y = GAIT_ANKLE_HEIGHT
+	var spread := right * lerpf(0.115, 0.24, _low_stance)
+	_pose_foot(keeper, false, ground - spread + forward * 0.05, _low_stance)
+	_pose_foot(keeper, true, ground + spread - forward * 0.08, _low_stance)
 
 func _reset_hand_targets(player: Node3D) -> void:
 	left_hand_target = left_hand.global_position
