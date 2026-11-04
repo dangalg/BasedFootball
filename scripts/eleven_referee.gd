@@ -5,6 +5,7 @@ const PACE := 3.9
 const STRIDE := 1.62
 const THIGH_LENGTH := 0.41
 const SHIN_LENGTH := 0.40
+const SIGHT_RANGE := 27.0
 
 var signal_kind := "play"
 var _velocity := Vector3.ZERO
@@ -87,6 +88,21 @@ func track_ball(ball_position: Vector3, delta: float) -> void:
 	var offset := target - position
 	_velocity = _velocity.move_toward((offset * 1.6).limit_length(PACE), 8.0 * delta)
 	_move_and_pose(delta, ball_position - position)
+
+
+func can_see_contact(spot: Vector3) -> bool:
+	var offset := spot - global_position
+	offset.y = 0.0
+	var distance := offset.length()
+	if distance > SIGHT_RANGE:
+		return false
+	if distance < 0.01:
+		return true
+	var facing := -global_basis.z
+	facing.y = 0.0
+	# Wide peripheral vision nearby narrows to the main field of view at distance.
+	var minimum_alignment := lerpf(-0.10, 0.45, smoothstep(5.0, 15.0, distance))
+	return facing.normalized().dot(offset / distance) >= minimum_alignment
 
 
 func signal_restart(spot: Vector3, direction: Vector3, indirect: bool) -> void:

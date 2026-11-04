@@ -8,6 +8,7 @@ const PASS_CALL_SECONDS := 1.8
 const TEAM_PRESS_RANGE := 12.0
 const HALFTIME_SECONDS := 3.0
 const GOAL_CELEBRATION_SECONDS := 1.6
+const FOUL_MIN_SLIDE_SPEED := 2.1
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -38,6 +39,7 @@ var pending_indirect_player: FootballPlayer
 var pending_indirect_reason := ""
 var indirect_spot := Vector3.ZERO
 var indirect_taker: FootballPlayer
+var pending_foul: Dictionary = {}
 var players: Array[FootballPlayer] = []
 var home_outfield: Array[FootballPlayer] = []
 var away_outfield: Array[FootballPlayer] = []
@@ -400,6 +402,7 @@ func _outfield_count() -> int:
 
 func reset_positions(kickoff_team: int) -> void:
 	_clear_offside()
+	pending_foul.clear()
 	indirect_taker = null
 	if referee != null:
 		referee.resume_play()
@@ -579,7 +582,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if phase != "playing":
 		return
-	if _award_indirect_restart():
+	if _award_indirect_restart() or _award_foul():
 		return
 	if not restart.is_empty():
 		if referee != null:
@@ -652,7 +655,7 @@ func _physics_process(delta: float) -> void:
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
-	if _award_indirect_restart():
+	if _award_indirect_restart() or _award_foul():
 		return
 	_check_goal()
 	if phase == "goal_celebration":
@@ -853,7 +856,7 @@ func _clear_offside() -> void:
 	pending_indirect_player = null
 
 func _on_ball_played(team: int, player_id: String, touch_kind: String) -> void:
-	if phase != "playing" or pending_indirect_player != null or team not in [0, 1]:
+	if phase != "playing" or pending_indirect_player != null or not pending_foul.is_empty() or team not in [0, 1]:
 		return
 	var restart_kind: String = restart.get("kind", "")
 	if indirect_taker != null:
@@ -923,7 +926,45 @@ func _on_dribble_contact(player: FootballPlayer) -> void:
 func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer) -> void:
 	if kind == "keeper_release":
 		reception.queue_delivery(player,str(detail.get("kind","roll")),ball,str(detail.get("receiver_id","")))
+	if kind == "slide_body_contact" and eleven_a_side:
+		_review_slide_contact(player, detail)
+		var logged := detail.duplicate()
+		logged.contact = _vec(detail.contact)
+		_record(kind, player, logged)
+		return
 	_record(kind, player, detail)
+
+func _review_slide_contact(player: FootballPlayer, detail: Dictionary) -> void:
+	if phase != "playing" or not restart.is_empty() or kickoff_remaining > 0.0 or is_instance_valid(kickoff_taker) or pending_indirect_player != null or not pending_foul.is_empty():
+		return
+	if bool(detail.ball_first) or float(detail.speed) < FOUL_MIN_SLIDE_SPEED:
+		return
+	var position := ball.global_position
+	if absf(position.x) > ElevenPitch.HALF_LENGTH + FootballBall.RADIUS or absf(position.z) > ElevenPitch.HALF_WIDTH + FootballBall.RADIUS:
+		return
+	var contact: Vector3 = detail.contact
+	if not referee.can_see_contact(contact):
+		return
+	for opponent: FootballPlayer in players:
+		if opponent.team != player.team and opponent.player_id == detail.victim:
+			pending_foul = {"offender": player, "victim": opponent.player_id, "contact": contact, "speed": detail.speed}
+			return
+
+func _award_foul() -> bool:
+	if pending_foul.is_empty():
+		return false
+	var offender: FootballPlayer = pending_foul.offender
+	var contact: Vector3 = pending_foul.contact
+	var spot := Vector3(clampf(contact.x, -49.5, 49.5), FootballBall.RADIUS, clampf(contact.z, -31.85, 31.85))
+	var defended_end := -offender.attack_sign()
+	var penalty := spot.x * defended_end >= ElevenPitch.HALF_LENGTH - ElevenPitch.PENALTY_DEPTH and absf(spot.z) <= ElevenPitch.GOAL_HALF_WIDTH + ElevenPitch.PENALTY_DEPTH
+	var kind := "penalty" if penalty else "direct_free_kick"
+	_record("foul", offender, {"victim": pending_foul.victim, "spot": _vec(spot), "speed": pending_foul.speed, "restart": kind})
+	if penalty:
+		spot = Vector3(defended_end * (ElevenPitch.HALF_LENGTH - ElevenPitch.PENALTY_SPOT), FootballBall.RADIUS, 0.0)
+	_begin_restart(kind, 1 - offender.team, spot)
+	sound.play_event("whistle")
+	return true
 
 func _control_ball() -> FootballPlayer:
 	if not ball.grip_holder_id.is_empty():
@@ -1062,6 +1103,7 @@ func throw_entering_pitch() -> bool:
 
 func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 	_clear_offside()
+	pending_foul.clear()
 	indirect_taker = null
 	_set_pressure_teammate(null)
 	throw_entry_time = 0.0
@@ -1088,8 +1130,10 @@ func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 		player.sprint = false
 		player.reset_action()
 	var inward := Vector3(-signf(spot.x) if kind != "throw_in" else 0.0, 0.0, -signf(spot.z) if kind != "goal_kick" else 0.0).normalized()
-	if kind == "indirect_free_kick":
+	if kind in ["direct_free_kick", "indirect_free_kick", "penalty"]:
 		inward = Vector3.RIGHT * taker.attack_sign()
+	if kind == "penalty":
+		_set_penalty_positions(taker)
 	var stance_distance := 0.8 if kind == "throw_in" else 0.55
 	taker.global_position = Vector3(spot.x, 0.06, spot.z) - inward * stance_distance
 	taker.aim = inward
@@ -1114,7 +1158,40 @@ func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 	restart = {"kind": kind, "taker": taker, "inward": inward, "remaining": 4.0 if human else 1.0, "human": human}
 	referee.signal_restart(spot, Vector3.RIGHT * taker.attack_sign(), kind == "indirect_free_kick")
 	_record(kind, taker)
-	hud.flash(kind.replace("_", " ").to_upper() + ("  /  CROSS OR SPACE TO TAKE" if human else ""), 3.0)
+	var hint := "  /  CROSS OR SPACE TO TAKE" if human else ""
+	if human and kind in ["direct_free_kick", "penalty"]:
+		hint = "  /  HOLD CIRCLE OR J TO SHOOT"
+	hud.flash(kind.replace("_", " ").to_upper() + hint, 3.0)
+
+func _set_penalty_positions(taker: FootballPlayer) -> void:
+	var attack := taker.attack_sign()
+	var keeper := keepers[1 - taker.team]
+	_place_restart_player(keeper, Vector3(attack * ElevenPitch.HALF_LENGTH, 0.06, 0.0))
+	keeper.aim = -Vector3.RIGHT * attack
+	var index := 0
+	for player in players:
+		if player == taker or player.is_goalkeeper:
+			continue
+		var depth := 28.8 - float(index / 10) * 3.0
+		var lane := (float(index % 10) - 4.5) * 3.0
+		_place_restart_player(player, Vector3(attack * depth, 0.06, lane))
+		player.aim = Vector3.RIGHT * attack
+		index += 1
+
+func _place_restart_player(player: FootballPlayer, spot: Vector3) -> void:
+	player.global_position = spot
+	player.linear_velocity = Vector3.ZERO
+	player.angular_velocity = Vector3.ZERO
+	player.reset_physics_interpolation()
+
+func _request_restart_strike(direction: Vector3, kind: String, speed: float, lift: float, receiver: FootballPlayer = null) -> void:
+	restart.strike_requested = true
+	restart.strike_timeout = 2.5
+	restart.strike_direction = direction
+	restart.strike_kind = kind
+	restart.strike_receiver_id = receiver.player_id if receiver != null else ""
+	restart.strike_speed = speed
+	restart.strike_lift = lift
 
 func _tick_restart(delta: float) -> void:
 	if restart.has("throw_direction"):
@@ -1143,19 +1220,39 @@ func _tick_restart(delta: float) -> void:
 		kicker.intent = approach.limit_length(0.35) if approach.length_squared() > 0.16 * 0.16 else Vector3.ZERO
 		if kicker.intent != Vector3.ZERO or FootballReception.flat(kicker.linear_velocity).length_squared() > 0.75 * 0.75:
 			return
-		var lift := 4.2 if restart.kind == "corner" else 1.1
-		if kicker.kick(ball, aim_direction, float(restart.strike_speed), lift, str(restart.strike_kind)):
+		if kicker.kick(ball, aim_direction, float(restart.strike_speed), float(restart.strike_lift), str(restart.strike_kind)):
 			kicker.pending_receiver_id = str(restart.strike_receiver_id)
 			ball.freeze = false
 			ball.sleeping = false
 		return
 	restart.remaining -= delta
-	var take_now := bool(restart.human) and Input.is_action_just_pressed("pass")
-	if float(restart.remaining) > 0.0 and not take_now:
-		return
 	var taker: FootballPlayer = restart.taker
 	var direction: Vector3 = restart.inward
 	var kind: String = restart.kind
+	if bool(restart.human) and kind in ["direct_free_kick", "penalty"]:
+		if Input.is_action_just_pressed("shoot"):
+			charging = true
+			charge = 0.0
+			shot_style = "normal"
+		if charging:
+			charge = minf(1.0, charge + delta / 0.8)
+			if Input.is_action_just_released("shoot"):
+				var aim := Input.get_vector("left", "right", "up", "down")
+				var intended := Vector3(aim.x, 0.0, aim.y).normalized()
+				if aim.length() > 0.25 and (kind != "penalty" or intended.dot(direction) > 0.2):
+					direction = intended
+				var launch := _shot_launch("normal", charge)
+				_request_restart_strike(direction, "shot", launch.x, launch.y)
+				charging = false
+				charge = 0.0
+			return
+	var take_now := bool(restart.human) and Input.is_action_just_pressed("pass")
+	if float(restart.remaining) > 0.0 and not take_now:
+		return
+	if kind == "penalty":
+		var target_z := taker.ai_rng.randf_range(-2.6, 2.6)
+		_request_restart_strike((direction * ElevenPitch.PENALTY_SPOT + Vector3.FORWARD * target_z).normalized(), "shot", 19.0, 1.35)
+		return
 	var minimum_alignment := THROW_MIN_INWARD if kind == "throw_in" else 0.15
 	var receiver: FootballPlayer = null
 	var best := -INF
@@ -1165,7 +1262,7 @@ func _tick_restart(delta: float) -> void:
 		var offset := FootballReception.flat(player.global_position - ball.global_position)
 		var distance := offset.length()
 		var alignment := offset.normalized().dot(direction)
-		if (kind != "indirect_free_kick" and alignment <= minimum_alignment) or player.ragdoll != null:
+		if (kind not in ["direct_free_kick", "indirect_free_kick"] and alignment <= minimum_alignment) or player.ragdoll != null:
 			continue
 		var score := alignment * 10.0 - absf(distance - 11.0) * 0.4
 		if distance > 2.5 and distance < 28.0 and score > best:
@@ -1178,17 +1275,12 @@ func _tick_restart(delta: float) -> void:
 		if stick.length() > 0.25:
 			var intended := Vector3(stick.x, 0, stick.y).normalized()
 			var inward: Vector3 = restart.inward
-			if kind == "indirect_free_kick" or intended.dot(inward) > minimum_alignment:
+			if kind in ["direct_free_kick", "indirect_free_kick"] or intended.dot(inward) > minimum_alignment:
 				direction = intended
 				receiver = null
 	var speed := 12.0 if receiver == null else clampf(ball.global_position.distance_to(receiver.global_position) * 0.9, 7.5, 16.0)
 	if kind != "throw_in":
-		restart.strike_requested = true
-		restart.strike_timeout = 2.5
-		restart.strike_direction = direction
-		restart.strike_kind = "lob" if kind == "corner" else "pass"
-		restart.strike_receiver_id = receiver.player_id if receiver != null else ""
-		restart.strike_speed = speed
+		_request_restart_strike(direction, "lob" if kind == "corner" else "pass", speed, 4.2 if kind == "corner" else 1.1, receiver)
 		return
 	taker.aim = direction
 	restart.throw_direction = direction

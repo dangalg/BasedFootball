@@ -1020,8 +1020,6 @@ func _update_challenge() -> void:
 	if action_kind == "":
 		return
 	var boot_world: Vector3 = _boot(kick_foot_right).global_position if action_kind == "kick" else visual_controller.right_boot.global_position
-	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
-		_slide_player_contacts(boot_world)
 	if not action_has_hit and is_instance_valid(action_ball) and action_ball.grip_holder_id.is_empty():
 		if action_kind == "kick":
 			if action_elapsed >= kick_contact_time - 0.015 and action_elapsed <= kick_contact_time + 0.045:
@@ -1075,6 +1073,8 @@ func _update_challenge() -> void:
 				action_has_hit = true
 				challenge_contacts += 1
 				match_touches += 1
+	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
+		_slide_player_contacts(boot_world)
 	last_boot_world = boot_world
 	if action_kind == "kick" and is_instance_valid(action_ball):
 		last_kick_ball_world = action_ball.global_position
@@ -1121,7 +1121,7 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		var impulse := direction * closing * effective_mass * 0.65
 		other.receive_slide(impulse, contact, closing)
 		apply_central_impulse(-impulse)
-		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest})
+		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest, "contact": contact, "ball_first": action_has_hit})
 
 func reset_action() -> void:
 	called_run_remaining = 0.0
