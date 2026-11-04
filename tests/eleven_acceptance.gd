@@ -9,6 +9,7 @@ const SCENE_PATH := "res://scenes/eleven_match.tscn"
 const JoypadDriver := preload("res://tests/eleven_joypad_driver.gd")
 const JoypadReceipts := preload("res://tests/eleven_joypad_receipts.gd")
 const PassSupportProbe := preload("res://tests/eleven_pass_support_probe.gd")
+const DefenseCoverProbe := preload("res://tests/eleven_defense_cover_probe.gd")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
 const MATCH_SECONDS := 180.0
 const CLOCK_STALL_SECONDS := 15.0
@@ -79,6 +80,7 @@ var _retail_joypad := false
 var _event_frames: Array[int] = []
 var _retail_touches: Array[Dictionary] = []
 var _pass_support := PassSupportProbe.new()
+var _defense_cover := DefenseCoverProbe.new()
 var _report_path := ""
 var _frames := 0
 var _max_frames := 0
@@ -265,7 +267,9 @@ func _observe() -> void:
 	_frames += 1
 	_observe_restarts()
 	if _retail_joypad:
-		_pass_support.sample(_game, Engine.get_physics_frames() - 1)
+		var frame := Engine.get_physics_frames() - 1
+		_pass_support.sample(_game, frame)
+		_defense_cover.sample(_game, frame)
 	if _throw_entry_check:
 		_observe_throw_entry()
 	_observe_clock()
@@ -494,6 +498,10 @@ func _finish() -> void:
 		retail["pass_support"] = pass_support
 		checks["onside_support_arrives_before_live_reception"] = int(pass_support["flight_support_witnesses"]) > 0
 		checks["home_completes_live_forward_pass"] = int(pass_support["forward_completions"]) > 0
+		var defense_cover := _defense_cover.summarize(_game, _retail_touches)
+		retail["defense_cover"] = defense_cover
+		checks["home_press_has_goal_side_cover_first_half"] = int(defense_cover["home_first_half"]["episodes"]) > 0
+		checks["home_press_has_goal_side_cover_second_half"] = int(defense_cover["home_second_half"]["episodes"]) > 0
 		_driver.release_input()
 	var passed := not checks.values().has(false)
 	var hz := float(Engine.physics_ticks_per_second)

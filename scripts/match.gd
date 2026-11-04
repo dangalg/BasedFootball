@@ -62,6 +62,7 @@ var controlled: FootballPlayer
 var called_runner: FootballPlayer
 var pass_call_remaining := 0.0
 var pressure_teammate: FootballPlayer
+var _containment: Dictionary = {}
 var selected_index: int = 0
 var scores: Array[int] = [0, 0]
 var remaining: float = DURATION
@@ -420,6 +421,7 @@ func _outfield_count() -> int:
 
 func reset_positions(kickoff_team: int) -> void:
 	_set_throw_hold_player(null)
+	_containment.clear()
 	ball.restart_striker_id = ""
 	_clear_offside()
 	pending_foul.clear()
@@ -668,11 +670,13 @@ func _physics_process(delta: float) -> void:
 	if decision_driver == null and Input.is_action_just_pressed("shoulder"):
 		if controlled.shoulder(ball):
 			_record("shoulder", controlled, {"source": "controller"})
+	if eleven_a_side and Engine.get_physics_frames() % 6 == 0:
+		_refresh_containment()
 	for player in players:
 		if player != controlled:
 			var difficulty := opponent_difficulty if player.team == 1 else 1
 			var called_receiver := controlled if pass_call_remaining > 0.0 and player.team == controlled.team else null
-			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty, called_receiver, pressure_teammate)
+			var action: String = (player as FootballGoalkeeper).decide_keeper(players,ball,delta) if player.is_goalkeeper else FootballAI.decide(player, players, ball, delta, eleven_a_side, difficulty, called_receiver, pressure_teammate, _containment)
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
@@ -695,6 +699,19 @@ func _attacking_contact() -> bool:
 	# This selects a nearby strike opportunity, not ownership of the ball.
 	# A reachable opponent touch or incoming pass can be hit first-time.
 	return ball.grip_holder_id.is_empty() and controlled.predict_strike_reach(ball, 0.22)
+
+func _refresh_containment() -> void:
+	var next := FootballAI.containment_pair(players, ball, _containment, pressure_teammate)
+	for role in ["press", "cover"]:
+		var previous: FootballPlayer = _containment.get(role)
+		var assigned: FootballPlayer = next.get(role)
+		if previous == assigned:
+			continue
+		if is_instance_valid(previous):
+			previous.reaction_timer = 0.0
+		if is_instance_valid(assigned):
+			assigned.reaction_timer = 0.0
+	_containment = next
 
 func _jockeying_against_away_ball() -> bool:
 	return eleven_a_side and controlled.jockey and ball.last_touch_team == 1 - controlled.team and ball.grip_holder_id.is_empty()
@@ -755,6 +772,15 @@ func _request_delivery(kind: String, strength: float, lift: float) -> void:
 	if kind == "through" and is_instance_valid(called_runner) and called_runner.called_run_remaining > 0.0 and ball.last_touch_team == controlled.team:
 		preferred = called_runner.player_id
 	var receiver := _intended_receiver(direction, preferred)
+	if eleven_a_side and kind == "through" and receiver != null:
+		var offset := FootballReception.flat(receiver.global_position - ball.global_position)
+		var velocity := FootballReception.flat(receiver.linear_velocity)
+		var attack := controlled.attack_sign()
+		if offset.length() >= 10.0 and offset.normalized().dot(direction) >= 0.83 and velocity.x * attack > 1.0:
+			var onside := ElevenOffside.line(players, controlled.team, attack, ball.global_position.x)
+			if not ElevenOffside.beyond(receiver, attack, onside):
+				var speed_ahead := velocity.dot(direction)
+				strength = maxf(strength, FootballReception.through_speed(offset.length(), speed_ahead))
 	# A kick may miss. Reading an intended receiver never rotates the strike
 	# towards that player or creates a successful contact.
 	if controlled.kick(ball, direction, strength, lift, kind):
@@ -1202,6 +1228,7 @@ func throw_entering_pitch() -> bool:
 
 func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "", retrieve_ball: bool = false) -> void:
 	_set_throw_hold_player(null)
+	_containment.clear()
 	ball.restart_striker_id = ""
 	_clear_offside()
 	pending_foul.clear()

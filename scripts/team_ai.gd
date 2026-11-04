@@ -9,10 +9,12 @@ const PASS_ADVANTAGE_MARGIN := 0.30
 const ELEVEN_HALF_LENGTH := 50.0
 const ELEVEN_HALF_WIDTH := 32.0
 const ELEVEN_MAX_PASS_DISTANCE := 21.0
+const ELEVEN_MAX_THROUGH_DISTANCE := 24.0
+const COVER_START_DEPTH := 18.0
 
 # Decisions use present positions/velocities, never score or future human input.
 # This layer supplies intent; all teams share FootballPlayer's physical actions.
-static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1, called_receiver: FootballPlayer = null, pressure_teammate: FootballPlayer = null) -> String:
+static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball: FootballBall, delta: float, eleven: bool = false, difficulty: int = 1, called_receiver: FootballPlayer = null, pressure_teammate: FootballPlayer = null, containment: Dictionary = {}) -> String:
 	if player.is_goalkeeper:
 		return ""
 	if player.ragdoll != null or player.hop_active:
@@ -143,18 +145,31 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		nearest = pressure_teammate
 	var target := ball.global_position
 	var forward_outlet := false
+	var cover_defender: FootballPlayer = null
+	var cover_point := Vector3.INF
+	if eleven and opponent_carrier != null and containment.get("carrier") == opponent_carrier \
+			and teammate_holder == null and not ball.pass_active and ball.grip_holder_id.is_empty():
+		var assigned_cover: FootballPlayer = containment["cover"]
+		var assigned_press: FootballPlayer = containment["press"]
+		if is_instance_valid(assigned_cover) and assigned_cover.upright_ready() and not assigned_cover.selected \
+				and not assigned_cover.sent_off and _available_to_press(assigned_press, player.team):
+			nearest = assigned_press
+			cover_defender = assigned_cover
+			cover_point = containment["point"]
 	if eleven and nearest != player:
 		var support_carrier := flight_receiver if flight_receiver != null and ball.grip_holder_id.is_empty() else teammate_holder
+		var attacking := teammate_holder != null or friendly_delivery
 		var outlet := Vector3.INF
 		if support_carrier != null and support_carrier.eleven_slot >= 0 and not support_carrier.is_goalkeeper:
 			var support_origin := ball.pass_target if support_carrier == flight_receiver else ball.global_position
 			outlet = _eleven_outlet_target(player, players, ball.global_position, support_origin, support_carrier, attack)
-		if outlet != Vector3.INF:
+		if cover_defender == player:
+			target = cover_point
+		elif outlet != Vector3.INF:
 			target = outlet
 			forward_outlet = true
 		else:
-			var attacking := teammate_holder != null or friendly_delivery
-			target = _eleven_shape_target(player, players, ball.global_position, nearest, support_carrier, opponent_carrier, attacking, attack)
+			target = _eleven_shape_target(player, players, ball.global_position, nearest, cover_defender, support_carrier, opponent_carrier, attacking, attack)
 	elif nearest != player:
 		var lane := (-5.0 if player.shirt_number == 7 else 5.0) + player.ai_lane_offset
 		if player.shirt_number == 4:
@@ -198,7 +213,8 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	var sprint_readiness := 0.65 if level < 0 else (0.94 if level > 0 else 0.85)
 	var outlet_run := forward_outlet and direction.x * attack > 2.0 and direction.length() > sprint_distance
 	var chase_run := nearest == player and (direction.length() > sprint_distance or catch_up_run)
-	player.sprint = (outlet_run or chase_run) and player.energy > 0.25 and confidence < sprint_readiness
+	var cover_run := cover_defender == player and direction.length() > sprint_distance
+	player.sprint = (outlet_run or chase_run or cover_run) and player.energy > 0.25 and confidence < sprint_readiness
 	# Defenders use the same finite contact windows and recovery as the controller.
 	if ball.grip_holder_id.is_empty() and opponent_carrier != null and nearest == player:
 		if level < 0:
@@ -279,7 +295,8 @@ static func _queue_pass(player: FootballPlayer, ball: FootballBall, options: Dic
 	var destination := _point(candidate["target"])
 	var pass_direction := _flat(destination - ball.global_position).normalized()
 	var kind := str(candidate["kind"])
-	var strength := clampf(float(candidate["speed"]) * player.ai_rng.randf_range(0.97, 1.03), 7.0, 14.0)
+	var max_speed := FootballReception.ELEVEN_MAX_THROUGH_SPEED if player.eleven_slot >= 0 and kind == "through" else 14.0
+	var strength := clampf(float(candidate["speed"]) * player.ai_rng.randf_range(0.97, 1.03), 7.0, max_speed)
 	var actual_direction := pass_direction.rotated(Vector3.UP, player.ai_rng.randf_range(-0.035, 0.035) / maxf(player.touch_skill, 0.1))
 	if not player.kick(ball, actual_direction, strength, 0.14 if kind == "through" else 0.12, kind):
 		return false
@@ -366,6 +383,11 @@ static func _pass_option(passer: FootballPlayer, receiver: FootballPlayer, playe
 	var attack := passer.attack_sign()
 	var distance := _flat(target - origin).length()
 	var speed := clampf(distance * 1.3, 7.0, 14.0)
+	var through := eleven and kind == "through"
+	if through and distance >= 10.0:
+		var direction := _flat(target - origin).normalized()
+		var runner_speed := _flat(receiver.linear_velocity).dot(direction)
+		speed = maxf(speed, FootballReception.through_speed(distance, runner_speed))
 	var lane := _lane_clearance(origin, target, speed, players, passer.team)
 	var target_space := _space_at(target, players, passer.team, minf(lead_seconds, 0.60))
 	var recent_passer := receiver.player_id == passer.last_received_from and receive_age <= RETURN_MEMORY_SECONDS
@@ -388,7 +410,7 @@ static func _pass_option(passer: FootballPlayer, receiver: FootballPlayer, playe
 		if carrier_space < 2.1 and pressure_relief > 1.0:
 			score += 0.9
 	var reason := "open_option"
-	var pass_range := ELEVEN_MAX_PASS_DISTANCE if eleven else MAX_PASS_DISTANCE
+	var pass_range := ELEVEN_MAX_THROUGH_DISTANCE if through else (ELEVEN_MAX_PASS_DISTANCE if eleven else MAX_PASS_DISTANCE)
 	var target_half_length := ELEVEN_HALF_LENGTH - 1.0 if eleven else 17.5
 	var target_half_width := ELEVEN_HALF_WIDTH - 1.0 if eleven else 11.3
 	if receiver.ragdoll != null or receiver.hop_active or receiver.recovery_remaining > 0 or receiver.stagger_remaining > 0:
@@ -430,7 +452,82 @@ static func _eleven_anchor(player: FootballPlayer, ball_position: Vector3, attac
 	var lane := player.eleven_home.z + clampf(ball_position.z * 0.26, -8.0, 8.0)
 	return Vector3(depth * attack, 0.0, clampf(lane, -29.0, 29.0))
 
-static func _eleven_shape_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, chaser: FootballPlayer, carrier: FootballPlayer, opponent_carrier: FootballPlayer, attacking: bool, attack: float) -> Vector3:
+static func containment_pair(players: Array[FootballPlayer], ball: FootballBall, previous: Dictionary, called_presser: FootballPlayer) -> Dictionary:
+	if absf(ball.global_position.x) < COVER_START_DEPTH or ball.pass_active or not ball.grip_holder_id.is_empty():
+		return {}
+	var carrier: FootballPlayer = null
+	for player in players:
+		if player.player_id == ball.last_touch_id and not player.is_goalkeeper:
+			carrier = player
+			break
+	if carrier == null or not (carrier.controlling_ball() or carrier.chasing_ball(ball)):
+		return {}
+	var team := 1 - carrier.team
+	var attack := -carrier.attack_sign()
+	if ball.global_position.x * attack > -COVER_START_DEPTH:
+		return {}
+	var origin := _flat(ball.global_position)
+	var motion := _flat(ball.linear_velocity)
+	if motion.x * attack < 0.0:
+		origin += (motion * 0.18).limit_length(1.1)
+	var point := _eleven_cover_point(origin, attack)
+	if point == Vector3.INF:
+		return {}
+	var same_carrier: bool = previous.get("carrier") == carrier
+	var previous_press: FootballPlayer = previous.get("press") if same_carrier else null
+	var previous_cover: FootballPlayer = previous.get("cover") if same_carrier else null
+	var press: FootballPlayer = null
+	if called_presser != null and not called_presser.selected and _available_to_press(called_presser, team):
+		press = called_presser
+	else:
+		var intercept := _flat(ball.global_position) + motion.limit_length(8.0) * 0.16
+		var best := INF
+		for player in players:
+			if not _available_to_press(player, team):
+				continue
+			var distance := _flat(player.global_position).distance_to(intercept)
+			var cost := distance - (2.0 if player == previous_press else 0.0)
+			if cost < best:
+				best = cost
+				press = player
+	if press == null:
+		return {}
+	var cover := _eleven_cover_player(players, team, ball.global_position, point, press, previous_cover, attack)
+	return {"carrier": carrier, "press": press, "cover": cover, "point": point} if cover != null else {}
+
+static func _available_to_press(player: FootballPlayer, team: int) -> bool:
+	return is_instance_valid(player) and player.team == team and not player.is_goalkeeper and not player.sent_off and player.ragdoll == null \
+		and not player.hop_active and player.recovery_remaining <= 0.0 and player.stagger_remaining <= 0.0 \
+		and (not player.selected or player.intent.length_squared() >= 0.01)
+
+static func _eleven_cover_point(ball_position: Vector3, attack: float) -> Vector3:
+	var origin := _flat(ball_position)
+	var goal_offset := Vector3(-attack * ELEVEN_HALF_LENGTH, 0, 0) - origin
+	var distance := goal_offset.length()
+	var step := minf(distance * 0.42, clampf(distance * 0.20, 2.4, 4.2))
+	var point := origin + goal_offset.normalized() * step
+	point.x = clampf(point.x, -ELEVEN_HALF_LENGTH + 1.8, ELEVEN_HALF_LENGTH - 1.8)
+	return point if (point.x - origin.x) * attack < -0.55 else Vector3.INF
+
+static func _eleven_cover_player(players: Array[FootballPlayer], team: int, ball_position: Vector3, point: Vector3, chaser: FootballPlayer, previous: FootballPlayer, attack: float) -> FootballPlayer:
+	var cover: FootballPlayer = null
+	var best_cost := INF
+	for teammate: FootballPlayer in players:
+		if teammate.team != team or teammate == chaser or teammate.selected or teammate.is_goalkeeper or teammate.eleven_slot < 3 or not teammate.upright_ready():
+			continue
+		var position := _flat(teammate.global_position)
+		var gap := position.distance_to(point)
+		var shape_gap := _eleven_anchor(teammate, ball_position, false, attack).distance_to(point)
+		if gap > 16.0:
+			continue
+		var recovery_penalty := 3.0 if (position.x - ball_position.x) * attack > 0.0 else 0.0
+		var cost := gap + shape_gap * 0.22 + recovery_penalty - (2.0 if teammate == previous else 0.0)
+		if cover == null or cost < best_cost - 0.01 or (absf(cost - best_cost) <= 0.01 and teammate.eleven_slot < cover.eleven_slot):
+			best_cost = cost
+			cover = teammate
+	return cover
+
+static func _eleven_shape_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, chaser: FootballPlayer, cover_defender: FootballPlayer, carrier: FootballPlayer, opponent_carrier: FootballPlayer, attacking: bool, attack: float) -> Vector3:
 	var anchor := _eleven_anchor(player, ball_position, attacking, attack)
 	if attacking:
 		# Nearby support can step sideways out of a blocked passing lane.
@@ -459,7 +556,7 @@ static func _eleven_shape_target(player: FootballPlayer, players: Array[Football
 			continue
 		var claimed := false
 		for teammate in players:
-			if teammate == player or teammate == chaser or teammate.team != player.team or teammate.is_goalkeeper or teammate.selected or teammate.ragdoll != null:
+			if teammate == player or teammate == chaser or teammate == cover_defender or teammate.team != player.team or teammate.is_goalkeeper or teammate.selected or teammate.ragdoll != null:
 				continue
 			if teammate.hop_active or teammate.recovery_remaining > 0.0 or teammate.stagger_remaining > 0.0:
 				continue
@@ -518,6 +615,12 @@ static func _eleven_outlet_target(player: FootballPlayer, players: Array[Footbal
 	var run_lane := clampf(origin.z - side * 8.0, -24.0, 24.0)
 	var short_target := Vector3(short_depth * attack, 0.0, short_lane)
 	var run_target := Vector3(run_depth * attack, 0.0, run_lane)
+	if run_depth >= receive_depth + 2.5:
+		var diagonal := Vector3(run_target.x, 0.0, clampf(origin.z + side * 14.0, -27.0, 27.0))
+		var run_value := _lane_clearance(origin, run_target, 15.0, players, player.team) + _space_at(run_target, players, player.team, 0.45) * 0.25
+		var diagonal_value := _lane_clearance(origin, diagonal, 15.0, players, player.team) + _space_at(diagonal, players, player.team, 0.45) * 0.25
+		if diagonal.distance_to(short_target) >= 5.0 and diagonal_value > run_value + 0.45:
+			run_target = diagonal
 	var assigned: FootballPlayer = null
 	for target: Vector3 in [short_target, run_target]:
 		if target.x * attack < receive_depth + 2.5:
@@ -533,7 +636,8 @@ static func _eleven_outlet_target(player: FootballPlayer, players: Array[Footbal
 			var anchor_gap := home.distance_to(target)
 			if anchor_gap > 26.0 or (teammate.eleven_slot >= 6 and protect_back_line):
 				continue
-			var cost := anchor_gap + _flat(teammate.global_position - target).length() * 0.30
+			var travel := _flat(teammate.global_position - target).length()
+			var cost := travel + anchor_gap * 0.45
 			if cost < best:
 				outlet = teammate
 				best = cost

@@ -1,6 +1,8 @@
 class_name FootballReception
 extends RefCounted
 
+const ELEVEN_MAX_THROUGH_SPEED := 20.0
+
 # A delivery is a teammate's intention, never ownership of the physical ball.
 var pending: Array[Dictionary] = []
 var flight_velocity := Vector3.ZERO
@@ -123,3 +125,6 @@ static func interception_point(receiver: FootballPlayer, ball: FootballBall) -> 
 
 static func flat(value: Vector3) -> Vector3:
 	return Vector3(value.x,0,value.z)
+
+static func through_speed(distance: float, runner_speed: float) -> float:
+	return clampf(9.7 + distance * 0.36 + clampf(runner_speed, 0.0, 5.0) * 0.65, 11.5, ELEVEN_MAX_THROUGH_SPEED)

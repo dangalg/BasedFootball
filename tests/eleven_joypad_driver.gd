@@ -5,6 +5,7 @@ extends Node
 
 const THINK_SECONDS := 0.11
 const SHOT_HOLD_SECONDS := 0.21
+const CARRY_LANE_SECONDS := 0.55
 const DEVICE := 0
 
 var game: Node3D
@@ -21,6 +22,9 @@ var _switch_in := 0.0
 var _shot_in := -1.0
 var _shot_aim := Vector3.ZERO
 var _restart_shot := false
+var _carry_actor := ""
+var _carry_in := 0.0
+var _carry_direction := Vector3.ZERO
 
 
 func configure(match_node: Node3D) -> void:
@@ -55,6 +59,7 @@ func _tick_input(delta: float) -> void:
 	_think_in -= delta
 	_switch_in -= delta
 	_pass_in -= delta
+	_carry_in -= delta
 	var restart: Dictionary = game.restart
 	if _shot_in >= 0.0:
 		if restart.is_empty() == _restart_shot:
@@ -105,8 +110,9 @@ func _play_open_ball() -> void:
 	var gap := approach.length()
 	var defending := ball.last_touch_team == 1
 	var held := not ball.grip_holder_id.is_empty()
+	var home_flight := ball.pass_active and ball.pass_team == actor.team and not defending and not held
 	_pressure(defending and not held and gap < 22.0)
-	if gap > 2.4 and _switch_in <= 0.0 and _try_switch(actor, ball, gap):
+	if not home_flight and gap > 2.4 and _switch_in <= 0.0 and _try_switch(actor, ball, gap):
 		_move(Vector3.ZERO)
 		return
 	var chase := approach + FootballReception.flat(ball.linear_velocity).limit_length(12.0) * 0.13
@@ -115,10 +121,23 @@ func _play_open_ball() -> void:
 		var homeward := FootballReception.flat(actor.eleven_home - actor.global_position)
 		_move(homeward.normalized() * clampf(homeward.length() * 0.20, 0.0, 0.72))
 		return
+	var pressure := _nearest_opponent(ball.global_position)
+	var defender := FootballReception.flat(pressure.global_position - ball.global_position) if pressure != null else Vector3.ZERO
+	var pressure_gap := defender.length() if pressure != null else INF
 	if defending:
-		_move(chase.normalized(), gap > 3.2, gap < 2.6)
-		if gap < 1.05 and ball.global_position.y < 0.35 and actor.upright_ready() and actor.tackle_cooldown <= 0.0:
+		_carry_actor = ""
+		var contested := pressure_gap < 2.05
+		_move(chase.normalized() if contested else chase_input, gap > 3.2, contested and gap < 2.6)
+		if contested and gap < 1.05 and ball.global_position.y < 0.35 and actor.upright_ready() and actor.tackle_cooldown <= 0.0:
 			_pulse(JOY_BUTTON_B, "tackle")
+		return
+	if home_flight and ball.pass_receiver_id != actor.player_id:
+		# Stay available for the next ball while the intended receiver tracks this one.
+		_move(Vector3.RIGHT * actor.attack_sign() * 0.47)
+		return
+	if home_flight and gap >= 1.55:
+		var interception := FootballReception.flat(ball.pass_target - actor.global_position)
+		_move(interception.normalized() * clampf(interception.length(), 0.0, 1.0), interception.length() > 3.2)
 		return
 	var playable: bool = gap < 1.5 and game._attacking_contact()
 	var carrying := actor.chasing_ball(ball)
@@ -138,24 +157,24 @@ func _play_open_ball() -> void:
 	if not playable and gap > 0.95:
 		_move(chase_input)
 		return
-	var pressure := _nearest_opponent(ball.global_position)
-	var defender := FootballReception.flat(pressure.global_position - ball.global_position) if pressure != null else Vector3.ZERO
-	var pressure_gap := defender.length() if pressure != null else INF
 	var side := forward.cross(Vector3.UP)
 	var lane_blocked := pressure_gap < 5.2 and defender.dot(forward) > 0.0 and absf(defender.dot(side)) < 1.55
-	if playable and can_release and _pass_in <= 0.0 and (lane_blocked or pressure_gap < 2.4):
-		var lane := _pass_lane(actor, ball, pressure_gap < 1.8)
-		if lane != Vector3.ZERO:
-			_move(lane * 0.85)
-			_pulse(JOY_BUTTON_A, "pass")
+	if playable and can_release and _pass_in <= 0.0:
+		var delivery := _choose_delivery(actor, ball, lane_blocked or pressure_gap < 2.4, pressure_gap < 1.8)
+		if not delivery.is_empty():
+			_move(delivery.direction * 0.85)
+			if delivery.through:
+				_pulse(JOY_BUTTON_Y, "through")
+			else:
+				_pulse(JOY_BUTTON_A, "pass")
 			_pass_in = 1.2
 			return
-	if lane_blocked:
-		var dodge := -signf(defender.dot(side))
-		if is_zero_approx(dodge):
-			dodge = -1.0 if side.z * actor.global_position.z > 0.0 else 1.0
-		forward = (forward + side * dodge * 0.58).normalized()
-	_move(forward * (0.76 if lane_blocked else 0.90))
+	var lane_closed := pressure_gap < 1.55 and defender.dot(_carry_direction) > 0.4 and absf(defender.dot(_carry_direction.cross(Vector3.UP))) < 0.60
+	if _carry_actor != actor.player_id or _carry_in <= 0.0 or lane_closed:
+		_carry_direction = _choose_carry_direction(ball.global_position, forward)
+		_carry_actor = actor.player_id
+		_carry_in = CARRY_LANE_SECONDS
+	_move(_carry_direction * (0.78 if lane_blocked else 0.90))
 
 
 func _try_switch(actor: FootballPlayer, ball: FootballBall, gap: float) -> bool:
@@ -173,9 +192,9 @@ func _try_switch(actor: FootballPlayer, ball: FootballBall, gap: float) -> bool:
 	return false
 
 
-func _pass_lane(actor: FootballPlayer, ball: FootballBall, allow_relief: bool) -> Vector3:
+func _choose_delivery(actor: FootballPlayer, ball: FootballBall, allow_short: bool, allow_relief: bool) -> Dictionary:
 	var best := -INF
-	var lane := Vector3.ZERO
+	var choice: Dictionary = {}
 	var attack := actor.attack_sign()
 	var line := ElevenOffside.line(game.players, actor.team, attack, ball.global_position.x)
 	for teammate: FootballPlayer in game.home_outfield:
@@ -184,17 +203,40 @@ func _pass_lane(actor: FootballPlayer, ball: FootballBall, allow_relief: bool) -
 		var relative := FootballReception.flat(teammate.global_position - ball.global_position)
 		var distance := relative.length()
 		var progress := relative.x * attack
-		if distance < 3.0 or distance > 17.0 or progress < (-5.0 if allow_relief else 1.5):
+		var velocity := FootballReception.flat(teammate.linear_velocity)
+		var through := progress >= 8.0 and distance <= 24.0 and velocity.x * attack > 0.8
+		if not through and (not allow_short or distance < 3.0 or distance > 17.0 or progress < (-5.0 if allow_relief else 1.5)):
 			continue
-		var direction := (relative + FootballReception.flat(teammate.linear_velocity).limit_length(3.0) * 0.32).normalized()
+		var lead := 0.55 if through else 0.32
+		var direction := (relative + velocity.limit_length(4.0) * lead).normalized()
 		var clearance := 4.0
 		for opponent: FootballPlayer in game.away_outfield:
 			var offset := FootballReception.flat(opponent.global_position - ball.global_position)
+			offset += FootballReception.flat(opponent.linear_velocity) * clampf(offset.dot(direction) / 15.0, 0.0, 0.40)
 			var projection := clampf(offset.dot(direction), 0.45, distance)
 			clearance = minf(clearance, (offset - direction * projection).length())
-		if clearance < 1.05:
+		if clearance < (1.35 if through else 1.05):
 			continue
-		var score := clearance * 1.7 + clampf(progress, -5.0, 12.0) * 0.72 - distance * 0.12
+		var score := clearance * 1.7 + clampf(progress, -5.0, 16.0) * 0.72 - distance * 0.12
+		if score > best:
+			best = score
+			choice = {"direction": direction, "through": through}
+	return choice
+
+
+func _choose_carry_direction(origin: Vector3, forward: Vector3) -> Vector3:
+	var best := -INF
+	var lane := forward
+	for angle: float in [0.0, -0.43, 0.43]:
+		var direction := forward.rotated(Vector3.UP, angle)
+		var clearance := 4.0
+		for opponent: FootballPlayer in game.away_outfield:
+			var future := opponent.global_position + opponent.linear_velocity * 0.38
+			var offset := FootballReception.flat(future - origin)
+			var along := clampf(offset.dot(direction), 0.70, 3.6)
+			clearance = minf(clearance, (offset - direction * along).length())
+		var end_z := absf(origin.z + direction.z * 3.6)
+		var score := clearance + direction.dot(forward) * 1.65 - maxf(0.0, end_z - 29.0) * 0.9
 		if score > best:
 			best = score
 			lane = direction
