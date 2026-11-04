@@ -817,12 +817,15 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if pressed.get("primary", false):
 		shot_buffer_remaining = 0.0
 		var attack := _attacking_contact()
-		var jockey_tackle := _jockeying_against_away_ball()
+		var jockey_tackle: bool = eleven_a_side and controlled.jockey
 		if not jockey_tackle and eleven_a_side and ball.grip_holder_id.is_empty():
 			attack = attack or controlled.chasing_ball(ball) or (ball.pass_active and ball.pass_receiver_id == controlled.player_id and controlled.reach_ball(ball, 1.65))
 		if jockey_tackle:
 			charging = false
 			charge = 0.0
+			var toward_ball := FootballReception.flat(ball.global_position - controlled.global_position)
+			if toward_ball.length_squared() > 0.0001:
+				controlled.aim = toward_ball.normalized()
 			var queued: bool = controlled.tackle(ball)
 			_record("circle_tackle", controlled, {"queued": queued, "strike_in_reach": attack, "touch_serial": ball.touch_serial})
 		elif attack:
@@ -1664,7 +1667,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_pause_players()
 			paused_ball_frozen = ball.freeze
 			ball.freeze = true
-			var styles := "\nL2 + Circle: standing tackle while defending.\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
+			var styles := "\nL2 + Circle: standing tackle. Release L2 before shooting.\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
 			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
 			var attack_side := "left" if ends_swapped else "right"
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks %s." % attack_side + runs, "Options / Esc  RESUME     •     Q  EXIT")

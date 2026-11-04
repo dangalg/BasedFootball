@@ -170,6 +170,7 @@ func animate(player: Node3D, delta: float) -> void:
 	var local_velocity: Vector3 = player.body_visual.basis.inverse() * velocity
 	var sliding: bool = player.action_kind == "slide"
 	var standing: bool = player.action_kind == "standing"
+	var standing_sweep: bool = standing and player.eleven_slot >= 0 and not player.is_goalkeeper
 	var shoulder: bool = player.action_kind == "shoulder"
 	var touching: bool = player.dribble_active
 	var sole_stopping: bool = touching and player.sole_stop_active and player.action_kind == "" and not player.hop_active
@@ -243,6 +244,11 @@ func animate(player: Node3D, delta: float) -> void:
 	if kicking and not coordinated_contact:
 		var support_right: bool = not player.kick_foot_right
 		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04))
+	elif standing_sweep:
+		var support_right: bool = not player.tackle_foot_right
+		var ground: Vector3 = player.global_position + player.body_visual.basis * Vector3(0.14 if support_right else -0.14, 0.0, 0.06)
+		ground.y = GAIT_ANKLE_HEIGHT
+		_pose_foot(player, support_right, ground)
 	elif standing or rising:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
 	elif touching and not sole_stopping and not coordinated_contact:
@@ -255,6 +261,17 @@ func animate(player: Node3D, delta: float) -> void:
 		var lateral := direction.cross(Vector3.UP)
 		_pose_foot(player, true, player.global_position + direction * 0.72 + Vector3.UP * 0.085)
 		_pose_foot(player, false, player.global_position + direction * 0.28 - lateral * 0.17 + Vector3.UP * 0.13)
+	elif standing_sweep:
+		var direction: Vector3 = player.action_direction
+		var side := direction.cross(Vector3.UP) * (1.0 if player.tackle_foot_right else -1.0)
+		var reach := smoothstep(0.0, 0.125, player.action_elapsed)
+		var release := smoothstep(0.14, player.action_duration, player.action_elapsed)
+		var outside := lerpf(0.105, 0.21, smoothstep(0.06, 0.16, player.action_elapsed))
+		var tip := direction * 0.58 + side * outside + Vector3.UP * 0.095
+		var finish := side * 0.13 + direction * 0.08 + Vector3.UP * 0.085
+		var start: Vector3 = player.tackle_start_foot_offset
+		var ankle := start.lerp(tip, reach).lerp(finish, release)
+		_pose_foot(player, player.tackle_foot_right, player.global_position + ankle)
 	elif standing:
 		var extension := sin(clampf(player.action_elapsed / 0.26, 0, 1) * PI)
 		_pose_foot(player, true, player.global_position + player.action_direction * lerpf(0.12, 0.68, extension) + Vector3.UP * 0.095)
@@ -614,6 +631,10 @@ func _throw_arm_basis(segment: Vector3) -> Basis:
 func sole_marker(_player: Node3D, right: bool) -> Vector3:
 	var boot := right_boot if right else left_boot
 	return boot.to_global(SOLE_LOCAL_CENTER)
+
+func tackle_marker(right: bool) -> Vector3:
+	var boot := right_boot if right else left_boot
+	return boot.to_global(Vector3(0.0, -0.02, -0.06))
 
 
 func sole_target_offset(player: Node3D) -> Vector3:

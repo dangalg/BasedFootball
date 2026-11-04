@@ -21,6 +21,9 @@ const CHASE_MAX_DISTANCE := 3.0
 const CHASE_MEMORY_SECONDS := 1.6
 const MAX_KICK_IMPULSE := 18.0
 const STRIKE_BOOT_REACH := FootballBall.RADIUS + 0.095
+const STANDING_TACKLE_REACH := FootballBall.RADIUS + 0.075
+const STANDING_TACKLE_RESTITUTION := 0.12
+const MAX_STANDING_TACKLE_IMPULSE := 2.6
 const STEER_ONSET_ANGLE := PI / 15.0 # 12 degrees.
 const STEER_MAX_REQUEST := PI * 0.5
 const STEER_MAX_ROTATION := PI / 9.0 # At most 20 degrees per real contact.
@@ -91,9 +94,11 @@ var kick_contact_time: float = 0.0
 var kick_planned_gap: float = -1.0
 var kick_foot_right: bool = true
 var kick_start_foot_offset := Vector3.ZERO
-var last_kick_ball_world := Vector3.ZERO
+var last_action_ball_world := Vector3.ZERO
 var last_kick_boot_gap: float = -1.0
 var last_boot_world := Vector3.ZERO
+var tackle_foot_right := true
+var tackle_start_foot_offset := Vector3.ZERO
 var completed_kicks: int = 0
 var last_kick_contact_distance: float = 0.0
 var dribble_active := false
@@ -267,7 +272,7 @@ func _physics_process(delta: float) -> void:
 	name_label.visible = selected
 	visual_controller.animate(self, delta)
 	_update_dribble_contact()
-	_update_challenge()
+	_update_challenge(delta)
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if ragdoll != null:
@@ -568,7 +573,7 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	control_stride_remaining = 0
 	touch_cooldown = action_duration
 	last_boot_world = _boot(kick_foot_right).global_position
-	last_kick_ball_world = ball.global_position
+	last_action_ball_world = ball.global_position
 	last_kick_boot_gap = -1
 	return true
 
@@ -1016,7 +1021,11 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 	control_stride_remaining = 0
 	tackle_remaining = duration
 	slide_victims.clear()
-	last_boot_world = visual_controller.right_boot.global_position
+	if _uses_standing_tackle_sweep() and is_instance_valid(ball):
+		tackle_foot_right = body_visual.to_local(ball.global_position).x >= 0.0
+		tackle_start_foot_offset = _boot(tackle_foot_right).global_position - global_position
+	last_boot_world = _challenge_boot_center()
+	last_action_ball_world = ball.global_position if is_instance_valid(ball) else Vector3.ZERO
 	if kind == "slide":
 		body_collider.shape.height = 0.8
 		body_collider.position.y = 0.43
@@ -1025,14 +1034,24 @@ func _begin_challenge(kind: String, ball: FootballBall, duration: float, cooldow
 		apply_central_impulse(action_direction * mass * 0.4)
 	return true
 
-func _update_challenge() -> void:
+func _uses_standing_tackle_sweep() -> bool:
+	return action_kind == "standing" and eleven_slot >= 0 and not is_goalkeeper
+
+func _challenge_boot_center() -> Vector3:
+	if action_kind == "kick":
+		return _boot(kick_foot_right).global_position
+	if _uses_standing_tackle_sweep():
+		return visual_controller.tackle_marker(tackle_foot_right)
+	return visual_controller.right_boot.global_position
+
+func _update_challenge(delta: float) -> void:
 	if action_kind == "":
 		return
-	var boot_world: Vector3 = _boot(kick_foot_right).global_position if action_kind == "kick" else visual_controller.right_boot.global_position
+	var boot_world := _challenge_boot_center()
 	if not action_has_hit and is_instance_valid(action_ball) and action_ball.grip_holder_id.is_empty():
 		if action_kind == "kick":
 			if action_elapsed >= kick_contact_time - 0.015 and action_elapsed <= kick_contact_time + 0.045:
-				var contact_distance := _moving_boot_distance(last_kick_ball_world, action_ball.global_position, last_boot_world, boot_world)
+				var contact_distance := _moving_boot_distance(last_action_ball_world, action_ball.global_position, last_boot_world, boot_world)
 				last_kick_boot_gap = contact_distance if last_kick_boot_gap < 0 else minf(last_kick_boot_gap, contact_distance)
 				if contact_distance <= STRIKE_BOOT_REACH:
 					var target := action_direction * kick_strength + Vector3.UP * kick_lift
@@ -1080,6 +1099,8 @@ func _update_challenge() -> void:
 							action_has_hit = true
 							challenge_contacts += 1
 							break
+		elif _uses_standing_tackle_sweep():
+			_check_standing_tackle_contact(boot_world, delta)
 		else:
 			var active := action_elapsed >= (0.08 if action_kind == "slide" else 0.05) and action_elapsed <= (0.50 if action_kind == "slide" else 0.2)
 			if active and _boot_distance(action_ball.global_position, last_boot_world, boot_world) <= FootballBall.RADIUS + 0.12:
@@ -1091,8 +1112,8 @@ func _update_challenge() -> void:
 	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
 		_slide_player_contacts(boot_world)
 	last_boot_world = boot_world
-	if action_kind == "kick" and is_instance_valid(action_ball):
-		last_kick_ball_world = action_ball.global_position
+	if is_instance_valid(action_ball):
+		last_action_ball_world = action_ball.global_position
 	if action_elapsed >= action_duration:
 		if action_kind == "kick" and not action_has_hit:
 			physical_event.emit("kick_miss", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "minimum_boot_gap": last_kick_boot_gap, "planned_boot_gap": kick_planned_gap, "planned_contact_seconds": kick_contact_time, "kind": kick_kind, "style": kick_style})
@@ -1102,6 +1123,45 @@ func _update_challenge() -> void:
 		action_kind = ""
 		kick_style = ""
 		pending_receiver_id = ""
+
+func _check_standing_tackle_contact(boot_world: Vector3, delta: float) -> void:
+	if action_elapsed < 0.05 or action_elapsed > 0.20:
+		return
+	var relative_start := last_action_ball_world - last_boot_world
+	var relative_end := action_ball.global_position - boot_world
+	var sweep := relative_end - relative_start
+	var speed_squared := sweep.length_squared()
+	var approach := relative_start.dot(sweep)
+	if speed_squared < 0.00000001 or approach >= 0.0:
+		return
+	var entry := 0.0
+	var outside := relative_start.length_squared() - STANDING_TACKLE_REACH * STANDING_TACKLE_REACH
+	if outside > 0.0:
+		var discriminant := approach * approach - speed_squared * outside
+		if discriminant < 0.0:
+			return
+		entry = (-approach - sqrt(discriminant)) / speed_squared
+		if entry > 1.0:
+			return
+	var separation := relative_start + sweep * entry
+	var normal := _flat(separation).normalized()
+	var boot_velocity := (boot_world - last_boot_world) / delta
+	var incoming := action_ball.linear_velocity
+	var closing := (boot_velocity - incoming).dot(normal)
+	if closing <= 0.0:
+		return
+	# A glancing tackle keeps the ball's tangential motion.
+	var impulse := normal * minf(action_ball.mass * closing * (1.0 + STANDING_TACKLE_RESTITUTION), MAX_STANDING_TACKLE_IMPULSE)
+	action_ball.touch(team, player_id, impulse, Vector3.ZERO, "deflection")
+	action_ball.control_block_remaining = 0.3
+	action_has_hit = true
+	challenge_contacts += 1
+	match_touches += 1
+	physical_event.emit("standing_tackle_contact", {
+		"touch_serial": action_ball.touch_serial, "gap": separation.length(),
+		"foot": "right" if tackle_foot_right else "left", "normal": _vector(normal),
+		"incoming_velocity": _vector(incoming), "boot_velocity": _vector(boot_velocity), "impulse": _vector(impulse),
+	})
 
 func _boot_distance(point: Vector3, start: Vector3, end: Vector3) -> float:
 	var segment := end - start
