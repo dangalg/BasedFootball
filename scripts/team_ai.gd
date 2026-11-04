@@ -291,8 +291,11 @@ static func evaluate_options(player: FootballPlayer, players: Array[FootballPlay
 	var candidates: Array[Dictionary] = []
 	var best_pass: Dictionary = {}
 	var best_score := -1000.0
+	var offside_depth := ElevenOffside.line(players, player.team, attack, origin.x) if eleven else INF
 	for receiver: FootballPlayer in players:
 		if receiver == player or receiver.team != player.team or receiver.is_goalkeeper:
+			continue
+		if eleven and ElevenOffside.beyond(receiver, attack, offside_depth):
 			continue
 		var distance := _flat(receiver.global_position - origin).length()
 		var velocity := _flat(receiver.linear_velocity).limit_length(receiver.pace)

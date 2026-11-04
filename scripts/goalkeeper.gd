@@ -206,7 +206,7 @@ func _check_hand_contact() -> void:
 	save_attempt_diagnostics = {"distance": distance, "both_hands_distance": both_hands, "relative_speed": incoming.length(), "inside_area": true, "hand_contact": true}
 	if can_catch:
 		held_ball = ball
-		ball.touch(team, player_id, Vector3.ZERO)
+		ball.touch(team, player_id, Vector3.ZERO, Vector3.ZERO, "save")
 		ball.grip_holder_id = player_id
 		ball.control_candidate_id = ""
 		grip_target = center
@@ -224,7 +224,7 @@ func _check_hand_contact() -> void:
 			normal = _field_direction()
 		var outgoing := normal * clampf(incoming.length() * 0.7, 4.0, 11.0) + Vector3.UP * 1.5
 		var impulse := ((outgoing - ball.linear_velocity) * ball.mass).limit_length(8.0)
-		ball.touch(team, player_id, impulse)
+		ball.touch(team, player_id, impulse, Vector3.ZERO, "save")
 		apply_central_impulse(-impulse)
 		parry_count += 1
 		hand_cooldown = 0.28

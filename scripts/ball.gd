@@ -1,6 +1,8 @@
 class_name FootballBall
 extends RigidBody3D
 
+signal played(team: int, player_id: String, touch_kind: String)
+
 const RADIUS := 0.11
 const FINESSE_DURATION := 1.4
 const FINESSE_SPIN := 36.0
@@ -84,7 +86,7 @@ func _ready() -> void:
 		patch.surface_end()
 		FootballArt.mesh(self, patch, black)
 
-func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vector3.ZERO) -> void:
+func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vector3.ZERO, touch_kind: String = "play") -> void:
 	clear_finesse()
 	if pass_active:
 		clear_pass("receiver_touch" if player_id == pass_receiver_id else "intercepted")
@@ -99,6 +101,7 @@ func touch(team: int, player_id: String, impulse: Vector3, offset: Vector3 = Vec
 		impulse_audit.pop_front()
 	sleeping = false
 	apply_impulse(impulse, offset)
+	played.emit(team, player_id, touch_kind)
 
 func begin_finesse(direction: Vector3, signed_curve: float) -> void:
 	# A confirmed strike adds sidespin. Positive curve follows positive yaw.

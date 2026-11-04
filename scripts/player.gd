@@ -1070,7 +1070,7 @@ func _update_challenge() -> void:
 		else:
 			var active := action_elapsed >= (0.08 if action_kind == "slide" else 0.05) and action_elapsed <= (0.50 if action_kind == "slide" else 0.2)
 			if active and _boot_distance(action_ball.global_position, last_boot_world, boot_world) <= FootballBall.RADIUS + 0.12:
-				action_ball.touch(team, player_id, action_direction * (3.8 if action_kind == "slide" else 2.6))
+				action_ball.touch(team, player_id, action_direction * (3.8 if action_kind == "slide" else 2.6), Vector3.ZERO, "deflection")
 				action_ball.control_block_remaining = 0.4 if action_kind == "slide" else 0.3
 				action_has_hit = true
 				challenge_contacts += 1

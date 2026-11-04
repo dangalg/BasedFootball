@@ -32,6 +32,12 @@ const ELEVEN_FORMATIONS := [
 var restart: Dictionary = {}
 var throw_entry_side := 0.0
 var throw_entry_time := 0.0
+var offside_team := -1
+var offside_candidates: Dictionary = {}
+var pending_indirect_player: FootballPlayer
+var pending_indirect_reason := ""
+var indirect_spot := Vector3.ZERO
+var indirect_taker: FootballPlayer
 var players: Array[FootballPlayer] = []
 var home_outfield: Array[FootballPlayer] = []
 var away_outfield: Array[FootballPlayer] = []
@@ -107,6 +113,7 @@ func _ready() -> void:
 	ball.name = "Ball"
 	if eleven_a_side:
 		ball.set_collision_mask_value(ElevenPitch.NET_COLLISION_LAYER, true)
+		ball.played.connect(_on_ball_played)
 	add_child(ball)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -386,6 +393,8 @@ func _outfield_count() -> int:
 	return ELEVEN_ANCHORS.size() if eleven_a_side else 3
 
 func reset_positions(kickoff_team: int) -> void:
+	_clear_offside()
+	indirect_taker = null
 	shot_buffer_remaining = 0.0
 	_set_pressure_teammate(null)
 	pass_call_remaining = 0.0
@@ -562,6 +571,8 @@ func _physics_process(delta: float) -> void:
 		return
 	if phase != "playing":
 		return
+	if _award_indirect_restart():
+		return
 	if not restart.is_empty():
 		_tick_restart(delta)
 		return
@@ -629,6 +640,8 @@ func _physics_process(delta: float) -> void:
 			if action != "":
 				_record(action + "_attempt" if action in ["pass", "shot"] else action, player, {"source": "ai"})
 	_control_ball()
+	if _award_indirect_restart():
+		return
 	_check_goal()
 	if phase == "goal_celebration":
 		return
@@ -822,6 +835,56 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if pressed.get("through", false):
 		_request_delivery("through", 13.5, 0.14)
 
+func _clear_offside() -> void:
+	offside_team = -1
+	offside_candidates.clear()
+	pending_indirect_player = null
+
+func _on_ball_played(team: int, player_id: String, touch_kind: String) -> void:
+	if phase != "playing" or pending_indirect_player != null or team not in [0, 1]:
+		return
+	var restart_kind: String = restart.get("kind", "")
+	if indirect_taker != null:
+		if player_id == indirect_taker.player_id and restart_kind.is_empty():
+			_queue_indirect_restart(indirect_taker, "double_touch")
+			return
+		if player_id != indirect_taker.player_id:
+			indirect_taker = null
+	if restart_kind in ["throw_in", "corner", "goal_kick"]:
+		return
+	if restart_kind == "indirect_free_kick":
+		indirect_taker = restart.taker
+	if team == offside_team and offside_candidates.has(player_id):
+		_queue_indirect_restart(offside_candidates[player_id], "offside")
+		return
+	if team != offside_team and touch_kind in ["save", "deflection"]:
+		return
+	offside_candidates.clear()
+	offside_team = team
+	var attack := keepers[team].attack_sign()
+	var depth := ElevenOffside.line(players, team, attack, ball.global_position.x)
+	for teammate: FootballPlayer in outfield_teams[team]:
+		if teammate.player_id != player_id and ElevenOffside.beyond(teammate, attack, depth):
+			offside_candidates[teammate.player_id] = teammate
+
+func _queue_indirect_restart(player: FootballPlayer, reason: String) -> void:
+	pending_indirect_player = player
+	pending_indirect_reason = reason
+	indirect_spot = ball.global_position
+
+func _award_indirect_restart() -> bool:
+	if pending_indirect_player == null:
+		return false
+	var offender := pending_indirect_player
+	var spot := Vector3(clampf(indirect_spot.x, -49.5, 49.5), FootballBall.RADIUS, clampf(indirect_spot.z, -31.85, 31.85))
+	var label := "OFFSIDE" if pending_indirect_reason == "offside" else "SECOND TOUCH"
+	_record(pending_indirect_reason, offender, {"spot": _vec(spot)})
+	_begin_restart("indirect_free_kick", 1 - offender.team, spot)
+	sound.play_event("whistle")
+	var hint := "  /  CROSS OR SPACE TO TAKE" if bool(restart.human) else ""
+	hud.flash(label + "  /  INDIRECT FREE KICK" + hint, 3.0)
+	return true
+
 func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 	if pass_call_remaining > 0.0 and player.team == controlled.team and player != controlled and player.pending_receiver_id == controlled.player_id and kind in ["pass", "through"]:
 		pass_call_remaining = 0.0
@@ -895,6 +958,13 @@ func _check_goal() -> void:
 	var bar := ElevenPitch.CROSSBAR_HEIGHT if eleven_a_side else 2.31
 	if absf(ball.global_position.x) > line + FootballBall.RADIUS and absf(ball.global_position.x) < line + 2.2 and absf(ball.global_position.z) < mouth - FootballBall.RADIUS and ball.global_position.y < bar - FootballBall.RADIUS:
 		var scoring := 0 if ball.global_position.x * keepers[0].attack_sign() > 0 else 1
+		if eleven_a_side and indirect_taker != null:
+			var side := signf(ball.global_position.x)
+			if ball.last_touch_team == scoring:
+				_begin_restart("goal_kick", 1 - scoring, Vector3(side * 44.5, FootballBall.RADIUS, 0.0))
+			else:
+				_begin_restart("corner", scoring, Vector3(side * 49.65, FootballBall.RADIUS, 31.65 if ball.global_position.z >= 0.0 else -31.65))
+			return
 		scores[scoring] += 1
 		sound.play_event("goal")
 		if eleven_a_side:
@@ -976,6 +1046,8 @@ func throw_entering_pitch() -> bool:
 	return throw_entry_time > 0.0 and point.z * throw_entry_side > ElevenPitch.HALF_WIDTH - FootballBall.RADIUS and ball.linear_velocity.z * throw_entry_side < 0.0 and absf(point.x) <= ElevenPitch.HALF_LENGTH + FootballBall.RADIUS
 
 func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
+	_clear_offside()
+	indirect_taker = null
 	_set_pressure_teammate(null)
 	throw_entry_time = 0.0
 	shot_buffer_remaining = 0.0
@@ -1001,6 +1073,8 @@ func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 		player.sprint = false
 		player.reset_action()
 	var inward := Vector3(-signf(spot.x) if kind != "throw_in" else 0.0, 0.0, -signf(spot.z) if kind != "goal_kick" else 0.0).normalized()
+	if kind == "indirect_free_kick":
+		inward = Vector3.RIGHT * taker.attack_sign()
 	var stance_distance := 0.8 if kind == "throw_in" else 0.55
 	taker.global_position = Vector3(spot.x, 0.06, spot.z) - inward * stance_distance
 	taker.aim = inward
@@ -1074,7 +1148,7 @@ func _tick_restart(delta: float) -> void:
 		var offset := FootballReception.flat(player.global_position - ball.global_position)
 		var distance := offset.length()
 		var alignment := offset.normalized().dot(direction)
-		if alignment <= minimum_alignment or player.ragdoll != null:
+		if (kind != "indirect_free_kick" and alignment <= minimum_alignment) or player.ragdoll != null:
 			continue
 		var score := alignment * 10.0 - absf(distance - 11.0) * 0.4
 		if distance > 2.5 and distance < 28.0 and score > best:
@@ -1087,7 +1161,7 @@ func _tick_restart(delta: float) -> void:
 		if stick.length() > 0.25:
 			var intended := Vector3(stick.x, 0, stick.y).normalized()
 			var inward: Vector3 = restart.inward
-			if intended.dot(inward) > minimum_alignment:
+			if kind == "indirect_free_kick" or intended.dot(inward) > minimum_alignment:
 				direction = intended
 				receiver = null
 	var speed := 12.0 if receiver == null else clampf(ball.global_position.distance_to(receiver.global_position) * 0.9, 7.5, 16.0)
