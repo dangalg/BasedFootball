@@ -10,6 +10,9 @@ const MAX_PLANT_DRIFT := 0.03
 const MAX_SOLE_HEIGHT := 0.035
 const MIN_PLANT_TICKS := 4
 const CUT_OBSERVATION_TICKS := 12
+const SHOT_FOLLOW_WINDOW := 0.140
+const SHOT_REPLANT_DEADLINE := 0.267
+const SHOT_SPEED_CHECK := 0.233
 
 class PoseProbe extends Node:
 	var sample: Callable
@@ -399,6 +402,8 @@ func _check_moving_contact() -> Dictionary:
 	cut["observed_ball_ahead_m"] = ball_ahead
 	cut["observed_ball_separation_m"] = ball_separation if is_finite(ball_separation) else null
 	shot["observed_forward_launch_mps"] = shot_launch
+	var recovery := _shot_recovery_receipt(shot)
+	shot["recovery"] = recovery
 	return {
 		"live_cut_while_jogging": cut.get("physical", false) and float(cut.get("player_speed_mps", 0.0)) > 1.4,
 		"cut_redirects_free_roll": heading_improvement >= 8.0 and ball_ahead > 0.08 and ball_separation <= 0.95,
@@ -406,11 +411,76 @@ func _check_moving_contact() -> Dictionary:
 		"live_shot_while_moving": shot.get("physical", false) and float(shot.get("player_speed_mps", 0.0)) > 0.60 and float(shot.get("incoming_speed_mps", 0.0)) > 0.5,
 		"shot_support_foot_holds": shot.get("support_holds", false),
 		"shot_leaves_boot_toward_stick": shot_launch > 5.0 and _peak_ball_y > FootballBall.RADIUS + 0.035,
+		"striking_foot_follows_through_and_replants": recovery.get("forward_follow", false) and recovery.get("replant_by_deadline", false),
+		"run_resumes_toward_held_input": float(recovery.get("forward_speed_gain_mps", 0.0)) >= 0.30,
 		"one_cut_and_one_shot_on_same_ball": _ball.impulse_audit.size() == 3 and int(cut.get("serial", -1)) == _seed_serial + 1 and int(shot.get("serial", -1)) == _seed_serial + 2,
 		"ball_remains_free": _free_ball,
 		"ball_and_feet_framed": _framed,
 		"finite_player_pose_and_ball": _finite,
 	}
+
+
+func _shot_recovery_receipt(shot: Dictionary) -> Dictionary:
+	if not shot.get("physical", false):
+		return {}
+	var frame := int(shot["frame"])
+	var impact := _sample_at_frame(frame)
+	var direction := _cut_direction()
+	var foot: String = shot["event"]["detail"]["foot"]
+	var impact_sole := _read_vector(impact[foot]["sole"])
+	var impact_lead := (impact_sole - _read_vector(impact["player"])).dot(direction)
+	var impact_speed := _read_vector(impact["velocity"]).dot(direction)
+	var speed_sample := _sample_at_frame(frame + roundi(SHOT_SPEED_CHECK / _delta))
+	var speed_gain := 0.0
+	if not speed_sample.is_empty():
+		speed_gain = _read_vector(speed_sample["velocity"]).dot(direction) - impact_speed
+	var recovery := {
+		"strike_foot": foot,
+		"impact_forward_speed_mps": impact_speed,
+		"speed_check_seconds": SHOT_SPEED_CHECK,
+		"forward_speed_gain_mps": speed_gain,
+		"forward_follow": false,
+		"peak_follow_advance_m": 0.0,
+		"peak_follow_lift_m": 0.0,
+		"replant_deadline_seconds": SHOT_REPLANT_DEADLINE,
+		"replant_by_deadline": false,
+	}
+	var plant_anchor: Dictionary = {}
+	var plant_frame := 0
+	for sample in _samples:
+		var tick := int(sample["frame"]) - frame
+		var elapsed := tick * _delta
+		if tick <= 0 or elapsed > SHOT_REPLANT_DEADLINE:
+			continue
+		var pose: Dictionary = sample[foot]
+		var sole := _read_vector(pose["sole"])
+		if elapsed <= SHOT_FOLLOW_WINDOW:
+			var advance := (sole - _read_vector(sample["player"])).dot(direction) - impact_lead
+			var lift := sole.y - impact_sole.y
+			recovery["peak_follow_advance_m"] = maxf(recovery["peak_follow_advance_m"], advance)
+			recovery["peak_follow_lift_m"] = maxf(recovery["peak_follow_lift_m"], lift)
+			recovery["forward_follow"] = recovery["forward_follow"] or (advance >= 0.03 and lift >= 0.04)
+		if not recovery["forward_follow"] or recovery["replant_by_deadline"]:
+			continue
+		var height := 0.0
+		var drift := 0.0
+		for key in ["sole", "toe", "heel"]:
+			var point := _read_vector(pose[key])
+			height = maxf(height, absf(point.y))
+			if not plant_anchor.is_empty():
+				drift = maxf(drift, FootballReception.flat(point - _read_vector(plant_anchor[key])).length())
+		if height > MAX_SOLE_HEIGHT:
+			plant_anchor = {}
+			continue
+		if plant_anchor.is_empty() or drift > MAX_PLANT_DRIFT:
+			plant_anchor = pose
+			plant_frame = int(sample["frame"])
+		elif int(sample["frame"]) - plant_frame >= MIN_PLANT_TICKS - 1:
+			recovery["replant_by_deadline"] = true
+			recovery["replant_seconds"] = (plant_frame - frame) * _delta
+			recovery["replant_confirmed_seconds"] = elapsed
+			recovery["replant_drift_m"] = drift
+	return recovery
 
 
 func _moving_contact_receipt(kind: String, gap_field: String, reach: float) -> Dictionary:

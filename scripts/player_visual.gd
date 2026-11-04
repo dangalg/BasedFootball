@@ -8,6 +8,8 @@ const HAND_LOCAL_CENTER := Vector3(0.0, -0.26, 0.0)
 const GAIT_ANKLE_HEIGHT := 0.052
 const GAIT_WALK_STEP_SECONDS := 0.27
 const GAIT_RUN_STEP_SECONDS := 0.177
+const KICK_FOLLOW_THROUGH_SECONDS := 0.075
+const KICK_RECOVERY_STEP_SECONDS := 0.105
 
 var left_knee: Node3D
 var right_knee: Node3D
@@ -25,6 +27,7 @@ var _gait_active := false
 var _gait_swing_foot := -1
 var _gait_next_foot := 0
 var _gait_progress := 0.0
+var _gait_kick_step := false
 var _gait_released_foot := -1
 var _gait_release_start := 1.0
 var _gait_swing_start := Vector3.ZERO
@@ -151,20 +154,23 @@ func animate(player: Node3D, delta: float) -> void:
 	var previous_left_leg_rotation: Quaternion = player.left_leg.quaternion
 	var previous_left_knee_rotation: Quaternion = left_knee.quaternion
 	var velocity := Vector3(player.linear_velocity.x, 0, player.linear_velocity.z)
-	var facing: Vector3 = player.action_direction if player.action_kind != "" else player.aim
+	var kick_action: bool = player.action_kind == "kick"
+	var since_impact: float = player.action_elapsed - player.kick_impact_time
+	var kick_stepping: bool = kick_action and player.kick_impact_time >= 0.0 \
+		and since_impact >= KICK_FOLLOW_THROUGH_SECONDS
+	var kicking := kick_action and not kick_stepping
+	var free_facing: bool = player.action_kind == "" or kick_stepping
+	var facing: Vector3 = player.aim if free_facing else player.action_direction
 	# Intent can reverse before momentum does. Face the actual running direction
 	# rather than playing a forward run while travelling away from the face.
-	if player.action_kind == "" and not player.jockey and velocity.length() > 0.65:
+	if free_facing and not player.jockey and velocity.length() > 0.65:
 		facing = velocity.normalized()
-	if player.action_kind == "kick":
-		facing = player.action_direction
 	if facing.length_squared() > 0.1:
 		player.body_visual.rotation.y = lerp_angle(player.body_visual.rotation.y, atan2(-facing.x, -facing.z), 12.0 * delta)
 	var local_velocity: Vector3 = player.body_visual.basis.inverse() * velocity
 	var sliding: bool = player.action_kind == "slide"
 	var standing: bool = player.action_kind == "standing"
 	var shoulder: bool = player.action_kind == "shoulder"
-	var kicking: bool = player.action_kind == "kick"
 	var touching: bool = player.dribble_active
 	var sole_stopping: bool = touching and player.sole_stop_active and player.action_kind == "" and not player.hop_active
 	var touch_weight := 0.0
@@ -176,7 +182,7 @@ func animate(player: Node3D, delta: float) -> void:
 	var rising: bool = not sliding and player.body_visual.position.y < -0.25 and player.recovery_remaining > 0
 	var upright_outfield: bool = player.eleven_slot >= 0 and not player.is_goalkeeper \
 		and not rising and not player.hop_active and not player.getting_up and player.throw_in_phase < 0.0
-	var grounded_gait: bool = upright_outfield and player.action_kind == "" and not touching
+	var grounded_gait: bool = upright_outfield and free_facing and not touching
 	var coordinated_contact: bool = upright_outfield and (kicking or (player.action_kind == "" and touching and not sole_stopping))
 	var strike_right: bool = player.kick_foot_right if kicking else player.dribble_foot_right
 	var contact_elapsed: float = player.action_elapsed if kicking else player.dribble_elapsed
@@ -252,12 +258,16 @@ func animate(player: Node3D, delta: float) -> void:
 	elif standing:
 		var extension := sin(clampf(player.action_elapsed / 0.26, 0, 1) * PI)
 		_pose_foot(player, true, player.global_position + player.action_direction * lerpf(0.12, 0.68, extension) + Vector3.UP * 0.095)
-	elif player.action_kind == "kick":
+	elif kicking:
 		var contact: Vector3 = player.global_position + player.kick_target_offset
 		var start: Vector3 = player.global_position + player.kick_start_foot_offset
 		var backswing: Vector3 = contact - player.action_direction * 0.22 + Vector3.UP * 0.12
 		var target: Vector3
-		if player.action_elapsed <= player.kick_contact_time:
+		if player.kick_impact_time >= 0.0:
+			var follow := smoothstep(0.0, KICK_FOLLOW_THROUGH_SECONDS, since_impact)
+			var extension := 1.0 if player.kick_kind == "shot" else 0.65
+			target = contact + (player.action_direction * 0.19 + Vector3.UP * 0.16) * follow * extension
+		elif player.action_elapsed <= player.kick_contact_time:
 			var swing: float = player.action_elapsed / maxf(player.kick_contact_time, 0.00001)
 			target = start.lerp(backswing, smoothstep(0, 0.35, swing)) if swing < 0.35 else backswing.lerp(contact, smoothstep(0.35, 1.0, swing))
 		else:
@@ -391,6 +401,7 @@ func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> voi
 		_gait_active = true
 		_gait_swing_foot = -1
 		_gait_released_foot = -1
+		_gait_kick_step = false
 		_gait_next_foot = 0 if feet[0].global_position.y >= feet[1].global_position.y else 1
 		for foot in 2:
 			var offset := feet[foot].global_position - homes[foot]
@@ -403,7 +414,11 @@ func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> voi
 				_gait_anchors[support] = _contact_support_anchor
 				_gait_bases[support] = _contact_support_basis
 				_gait_next_foot = 1 - support
-			if feet[_gait_next_foot].global_position.y > GAIT_ANKLE_HEIGHT + 0.075:
+			if _contact_kicking and player.kick_impact_time >= 0.0:
+				_gait_next_foot = 1 - support
+				_gait_released_foot = _gait_next_foot
+				_gait_kick_step = true
+			elif feet[_gait_next_foot].global_position.y > GAIT_ANKLE_HEIGHT + 0.075:
 				_gait_released_foot = _gait_next_foot
 	_gait_last_root = root
 	if _gait_swing_foot < 0:
@@ -430,12 +445,14 @@ func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> voi
 	var swing_target := Vector3.ZERO
 	var swing_basis := facing
 	if swing_foot >= 0:
-		_gait_progress = minf(1.0, _gait_progress + delta / step_seconds)
+		var step_progress := delta / (KICK_RECOVERY_STEP_SECONDS if _gait_kick_step else step_seconds)
+		_gait_progress = minf(1.0, _gait_progress + step_progress)
 		# Land ahead of the hips so the next support step travels over the boot.
 		var landing := homes[swing_foot] + (velocity * step_seconds * 0.49).limit_length(0.43)
 		var blend := smoothstep(0.0, 1.0, _gait_progress)
 		swing_target = _gait_swing_start.lerp(landing, blend)
-		swing_target.y += sin(_gait_progress * PI) * lerpf(0.075, 0.20, pace)
+		var swing_clearance := 0.025 if _gait_kick_step else lerpf(0.075, 0.20, pace)
+		swing_target.y += sin(_gait_progress * PI) * swing_clearance
 		swing_basis = _gait_swing_basis.slerp(facing, blend)
 		player.step_phase = (float(swing_foot) + _gait_progress) * PI
 		var support := 1 - swing_foot
@@ -444,8 +461,9 @@ func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> voi
 		var sprint_toe_off := speed > 4.8 and _gait_progress >= lerpf(0.93, 0.72, pace)
 		if _gait_released_foot < 0 and (sprint_toe_off or support_gap > 0.405):
 			_gait_released_foot = support
-			_gait_release_start = maxf(0.0, _gait_progress - delta / step_seconds)
+			_gait_release_start = maxf(0.0, _gait_progress - step_progress)
 		if _gait_progress >= 1.0:
+			_gait_kick_step = false
 			_gait_anchors[swing_foot] = landing
 			_gait_bases[swing_foot] = facing
 			_gait_next_foot = 1 - swing_foot

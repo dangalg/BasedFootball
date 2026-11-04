@@ -86,6 +86,7 @@ var kick_lift: float = 0.0
 var kick_kind: String = "pass"
 var kick_style: String = ""
 var kick_target_offset := Vector3.ZERO
+var kick_impact_time := -1.0
 var kick_contact_time: float = 0.0
 var kick_planned_gap: float = -1.0
 var kick_foot_right: bool = true
@@ -281,7 +282,12 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if action_kind == "slide":
 		desired = action_direction * lerpf(7.0, 2.5, clampf(action_elapsed / action_duration, 0, 1))
 	elif action_kind == "kick":
-		desired *= 0.35
+		var recovery := 0.0
+		if kick_impact_time >= 0.0:
+			var since_impact := action_elapsed - kick_impact_time
+			var landing_time := FootballPlayerVisual.KICK_FOLLOW_THROUGH_SECONDS + FootballPlayerVisual.KICK_RECOVERY_STEP_SECONDS
+			recovery = smoothstep(0.045, landing_time, since_impact)
+		desired *= lerpf(0.35, 1.0, recovery)
 	elif action_kind == "standing":
 		desired = action_direction * 1.8
 	elif action_kind == "shoulder":
@@ -548,6 +554,7 @@ func kick(ball: FootballBall, direction: Vector3, strength: float, lift: float, 
 	kick_lift = lift
 	kick_contact_time = float(plan.get("time", preferred))
 	kick_planned_gap = float(plan.get("gap", -1.0))
+	kick_impact_time = -1.0
 	action_duration = 0.42 if kick_kind == "shot" else 0.32
 	action_elapsed = 0
 	action_ball = ball
@@ -1050,6 +1057,9 @@ func _update_challenge() -> void:
 					completed_kicks += 1
 					last_kick_contact_distance = contact_distance
 					kick_target_offset = action_ball.global_position - global_position
+					if eleven_slot >= 0 and not is_goalkeeper:
+						kick_impact_time = action_elapsed
+						kick_target_offset = boot_world - global_position
 					match_touches += 1
 					strike_contact.emit(kick_kind)
 					physical_event.emit("kick_contact", {"foot": "right" if kick_foot_right else "left", "aim_direction": _vector(action_direction), "boot_gap": contact_distance, "planned_boot_gap": kick_planned_gap, "planned_contact_seconds": kick_contact_time, "actual_contact_seconds": action_elapsed, "incoming_velocity": _vector(incoming), "impulse": _vector(impulse), "predicted_velocity_after": _vector(incoming + impulse / action_ball.mass), "power": kick_strength, "kind": kick_kind, "style": kick_style, "curve_sign": curve_sign, "touch_serial": action_ball.touch_serial})
@@ -1146,6 +1156,7 @@ func reset_action() -> void:
 	# Restarts reset action state as well as transforms, including a lowered slide.
 	action_kind = ""
 	action_elapsed = 0
+	kick_impact_time = -1.0
 	tackle_remaining = 0
 	tackle_cooldown = 0
 	recovery_remaining = 0
