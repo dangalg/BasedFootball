@@ -3,8 +3,11 @@ extends SceneTree
 ## Launch with --script res://tests/eleven_acceptance.gd -- --eleven-acceptance
 ## Optional --report=<absolute JSON path> preserves the full event log.
 ## --menu-acceptance --formation-acceptance selects 4-4-2 before kickoff.
+## --retail-joypad sends mapped gamepad events through the normal match path.
 
 const SCENE_PATH := "res://scenes/eleven_match.tscn"
+const JoypadDriver := preload("res://tests/eleven_joypad_driver.gd")
+const JoypadReceipts := preload("res://tests/eleven_joypad_receipts.gd")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
 const MATCH_SECONDS := 180.0
 const CLOCK_STALL_SECONDS := 15.0
@@ -70,7 +73,10 @@ class ControllerDriver extends Node:
 
 
 var _game: Node3D
-var _driver: ControllerDriver
+var _driver: Node
+var _retail_joypad := false
+var _event_frames: Array[int] = []
+var _retail_touches: Array[Dictionary] = []
 var _report_path := ""
 var _frames := 0
 var _max_frames := 0
@@ -118,6 +124,10 @@ func _start() -> void:
 	if "--eleven-acceptance" not in arguments:
 		_abort("Pass -- --eleven-acceptance to isolate career data.")
 		return
+	_retail_joypad = "--retail-joypad" in arguments
+	if _retail_joypad and ("--throw-entry" in arguments or "--away-kickoff" in arguments or not _report_path.is_absolute_path() or FileAccess.file_exists(_report_path)):
+		_abort("Use a fresh absolute --report path and the normal kickoff with --retail-joypad.")
+		return
 	var check_formation := "--formation-acceptance" in arguments
 	if check_formation and not "--menu-acceptance" in arguments:
 		_abort("Pass --menu-acceptance to exercise the formation selector.")
@@ -163,14 +173,21 @@ func _start() -> void:
 		_game.reset_positions(1)
 	_throw_entry_check = "--throw-entry" in arguments
 	_initial_shape = [_spread(_game.home_outfield), _spread(_game.away_outfield)]
-	_driver = ControllerDriver.new()
-	_driver.game = _game
+	if _retail_joypad:
+		# The save path is already isolated. Enable the retail restart controls.
+		_game.acceptance = false
+		_driver = JoypadDriver.new()
+		_driver.configure(_game)
+		_game.ball.played.connect(_record_retail_touch)
+	else:
+		_driver = ControllerDriver.new()
+		_driver.game = _game
+		_game.decision_driver = _driver
 	for index in range(_game.players.size()):
 		var player: FootballPlayer = _game.players[index]
 		player.ai_rng.seed = SEED + index
 		player.ai_style = player.ai_rng.randf_range(0.25, 0.75)
 	_game.add_child(_driver)
-	_game.decision_driver = _driver
 	_game.set_process_unhandled_input(false)
 	_sample_interval = maxi(1, Engine.physics_ticks_per_second / 2)
 	_max_frames = ceili((_match_seconds * 2.0 + ABSOLUTE_PADDING_SECONDS) * Engine.physics_ticks_per_second)
@@ -320,6 +337,8 @@ func _observe_restarts() -> void:
 	while _event_cursor < _game.action_log.size():
 		var event: Dictionary = _game.action_log[_event_cursor]
 		_event_cursor += 1
+		if _retail_joypad:
+			_event_frames.append(Engine.get_physics_frames() - 1)
 		var kind: String = event["kind"]
 		if kind in RESTARTS:
 			_restarts.append({"kind": kind, "team": event["team"], "time": event["time"],
@@ -363,6 +382,16 @@ func _backward_kickoff(event: Dictionary, backward_sign: float) -> bool:
 		if entry["serial"] == serial and entry["player_id"] == event["player"]:
 			return float(entry["impulse"][0]) * backward_sign > 0.0
 	return false
+
+
+func _record_retail_touch(team: int, player_id: String, kind: String) -> void:
+	var ball: FootballBall = _game.ball
+	var audit: Dictionary = ball.impulse_audit.back()
+	_retail_touches.append({
+		"serial": ball.touch_serial, "frame": audit["physics_frame"], "team": team, "player": player_id,
+		"controlled": _game.controlled.player_id, "kind": kind, "impulse": audit["impulse"],
+		"live": _game.phase == "playing" and _game.restart.is_empty() and _game.kickoff_remaining <= 0.0 and not is_instance_valid(_game.kickoff_taker),
+	})
 
 
 func _record_second_half(event: Dictionary) -> void:
@@ -452,6 +481,12 @@ func _finish() -> void:
 	if not _formation_opening.is_empty():
 		checks["home_442_applied_at_kickoff"] = _formation_opening["home_formation_selected"] and _formation_opening["home_442"]
 		checks["away_433_preserved_at_kickoff"] = _formation_opening["away_433"]
+	var retail: Dictionary = {}
+	if _retail_joypad:
+		retail = JoypadReceipts.summarize(_game, _driver.inputs, _event_frames, _retail_touches)
+		checks.merge(retail["checks"])
+		checks["retail_input_path"] = _game.decision_driver == null and _driver.joy_events > 0
+		_driver.release_input()
 	var passed := not checks.values().has(false)
 	var hz := float(Engine.physics_ticks_per_second)
 	var report := {
@@ -475,6 +510,9 @@ func _finish() -> void:
 		"max_players_within_3m_of_ball": _max_near_ball, "max_outfield_speed_mps": _max_speed,
 		"max_ball_speed_mps": _max_ball_speed, "save_path": _game.squad.save_path,
 	}
+	if _retail_joypad:
+		report["retail_joypad"] = retail
+		report["joypad_events"] = _driver.joy_events
 	if not _report_path.is_empty():
 		var output := FileAccess.open(_report_path, FileAccess.WRITE)
 		if output == null:
@@ -482,6 +520,10 @@ func _finish() -> void:
 			return
 		var with_events := report.duplicate()
 		with_events["events"] = _game.action_log
+		if _retail_joypad:
+			with_events["input_edges"] = _driver.inputs
+			with_events["event_frames"] = _event_frames
+			with_events["touches"] = _retail_touches
 		output.store_string(JSON.stringify(with_events, "\t") + "\n")
 		output.close()
 	print("ELEVEN_ACCEPTANCE_RESULT " + JSON.stringify(report))

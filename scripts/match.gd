@@ -639,13 +639,13 @@ func _physics_process(delta: float) -> void:
 	controlled.intent = Vector3(movement.x, 0, movement.y)
 	controlled.sprint = Input.is_action_pressed("sprint") if decision_driver == null else decision_driver.sprinting
 	controlled.jockey = Input.is_action_pressed("jockey") if decision_driver == null else false
-	if controlled.jockey and not _attacking_contact():
+	if controlled.jockey and (_jockeying_against_away_ball() or not _attacking_contact()):
 		var facing := ball.global_position - controlled.global_position
 		facing.y = 0
-		controlled.aim = facing.normalized()
-	if movement.length_squared() > 0.04:
-		if not controlled.jockey or _attacking_contact():
-			controlled.aim = controlled.intent.normalized()
+		if facing.length_squared() > 0.0001:
+			controlled.aim = facing.normalized()
+	elif movement.length_squared() > 0.04:
+		controlled.aim = controlled.intent.normalized()
 	var controller_actions: Dictionary = {
 		"pass": Input.is_action_just_pressed("pass"), "through": Input.is_action_just_pressed("through"),
 		"primary": Input.is_action_just_pressed("shoot"), "primary_release": Input.is_action_just_released("shoot"),
@@ -695,6 +695,9 @@ func _attacking_contact() -> bool:
 	# This selects a nearby strike opportunity, not ownership of the ball.
 	# A reachable opponent touch or incoming pass can be hit first-time.
 	return ball.grip_holder_id.is_empty() and controlled.predict_strike_reach(ball, 0.22)
+
+func _jockeying_against_away_ball() -> bool:
+	return eleven_a_side and controlled.jockey and ball.last_touch_team == 1 - controlled.team and ball.grip_holder_id.is_empty()
 
 func _can_modify_shot() -> bool:
 	if not eleven_a_side or not ball.grip_holder_id.is_empty():
@@ -814,9 +817,15 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 	if pressed.get("primary", false):
 		shot_buffer_remaining = 0.0
 		var attack := _attacking_contact()
-		if eleven_a_side and ball.grip_holder_id.is_empty():
+		var jockey_tackle := _jockeying_against_away_ball()
+		if not jockey_tackle and eleven_a_side and ball.grip_holder_id.is_empty():
 			attack = attack or controlled.chasing_ball(ball) or (ball.pass_active and ball.pass_receiver_id == controlled.player_id and controlled.reach_ball(ball, 1.65))
-		if attack:
+		if jockey_tackle:
+			charging = false
+			charge = 0.0
+			var queued: bool = controlled.tackle(ball)
+			_record("circle_tackle", controlled, {"queued": queued, "strike_in_reach": attack, "touch_serial": ball.touch_serial})
+		elif attack:
 			charging = true
 			charge = 0
 			shot_style = _requested_shot_style(pressed) if eleven_a_side else "normal"
@@ -1655,7 +1664,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_pause_players()
 			paused_ball_frozen = ball.freeze
 			ball.freeze = true
-			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
+			var styles := "\nL2 + Circle: standing tackle while defending.\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
 			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
 			var attack_side := "left" if ends_swapped else "right"
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks %s." % attack_side + runs, "Options / Esc  RESUME     •     Q  EXIT")
