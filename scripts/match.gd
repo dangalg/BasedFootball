@@ -45,6 +45,7 @@ var outfield_teams: Array = [home_outfield, away_outfield]
 var keepers: Array[FootballPlayer] = []
 var reception := FootballReception.new()
 var ball: FootballBall
+var referee: ElevenReferee
 var camera: Camera3D
 var hud: FootballHUD
 var sound: FootballSound
@@ -115,6 +116,11 @@ func _ready() -> void:
 		ball.set_collision_mask_value(ElevenPitch.NET_COLLISION_LAYER, true)
 		ball.played.connect(_on_ball_played)
 	add_child(ball)
+	if eleven_a_side:
+		referee = ElevenReferee.new()
+		referee.name = "Referee"
+		referee.position = Vector3(-6.0, 0.0, 7.0)
+		add_child(referee)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 48 if eleven_a_side else 43
@@ -395,6 +401,8 @@ func _outfield_count() -> int:
 func reset_positions(kickoff_team: int) -> void:
 	_clear_offside()
 	indirect_taker = null
+	if referee != null:
+		referee.resume_play()
 	shot_buffer_remaining = 0.0
 	_set_pressure_teammate(null)
 	pass_call_remaining = 0.0
@@ -574,8 +582,12 @@ func _physics_process(delta: float) -> void:
 	if _award_indirect_restart():
 		return
 	if not restart.is_empty():
+		if referee != null:
+			referee.hold_position(delta)
 		_tick_restart(delta)
 		return
+	if referee != null:
+		referee.track_ball(ball.global_position, delta)
 	if kickoff_remaining > 0:
 		kickoff_remaining -= delta
 		for player in players:
@@ -850,6 +862,7 @@ func _on_ball_played(team: int, player_id: String, touch_kind: String) -> void:
 			return
 		if player_id != indirect_taker.player_id:
 			indirect_taker = null
+			referee.resume_play()
 	if restart_kind in ["throw_in", "corner", "goal_kick"]:
 		return
 	if restart_kind == "indirect_free_kick":
@@ -899,6 +912,8 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 		kickoff_receiver = null
 	if not restart.is_empty() and bool(restart.get("strike_requested", false)) and restart.taker == player and kind == str(restart.get("strike_kind", "")):
 		_record("restart_taken", player, {"restart": restart.kind, "touch_serial": ball.touch_serial})
+		if restart.kind != "indirect_free_kick":
+			referee.resume_play()
 		restart.clear()
 	sound.play_event("kick")
 
@@ -1097,6 +1112,7 @@ func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 	if human:
 		_select(field.find(taker))
 	restart = {"kind": kind, "taker": taker, "inward": inward, "remaining": 4.0 if human else 1.0, "human": human}
+	referee.signal_restart(spot, Vector3.RIGHT * taker.attack_sign(), kind == "indirect_free_kick")
 	_record(kind, taker)
 	hud.flash(kind.replace("_", " ").to_upper() + ("  /  CROSS OR SPACE TO TAKE" if human else ""), 3.0)
 
@@ -1118,6 +1134,7 @@ func _tick_restart(delta: float) -> void:
 			ball.sleeping = false
 			_record("restart_strike_timeout", kicker, {"restart": restart.kind})
 			restart.clear()
+			referee.resume_play()
 			return
 		var aim_direction: Vector3 = restart.strike_direction
 		var stance := ball.global_position - aim_direction * 0.55
@@ -1203,6 +1220,7 @@ func _tick_throw_in(delta: float) -> void:
 		"release_velocity": _vec(release_velocity), "touch_serial": ball.touch_serial,
 	})
 	restart.clear()
+	referee.resume_play()
 
 func _finish_match() -> void:
 	reception.reset(ball)
