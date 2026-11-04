@@ -6,9 +6,15 @@ const STRIDE := 1.62
 const THIGH_LENGTH := 0.41
 const SHIN_LENGTH := 0.40
 const SIGHT_RANGE := 27.0
+const WALL_WALK_PACE := 2.65
+const WALL_DRAW_DURATION := 0.32
+const WALL_SEGMENTS := 10
+const WALL_MARK_HEIGHT := 0.025
 
 var signal_kind := "play"
 var card_color := ""
+var wall_marked := false
+var wall_mark_position := Vector3.ZERO
 var _velocity := Vector3.ZERO
 var _last_ball := Vector3.ZERO
 var _has_ball_sample := false
@@ -25,6 +31,10 @@ var _signal_label: Label3D
 var _card: MeshInstance3D
 var _yellow_card: Material
 var _red_card: Material
+var _wall_pending := false
+var _wall_target := Vector3.ZERO
+var _wall_draw_time := -1.0
+var _wall_segments: Array[MeshInstance3D] = []
 var _arms: Array[Node3D] = []
 var _elbows: Array[Node3D] = []
 var _thighs: Array[Node3D] = []
@@ -80,6 +90,19 @@ func _ready() -> void:
 	_card.rotation.y = 0.35
 	_card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_card.hide()
+	var mark := Node3D.new()
+	mark.name = "FreeKickDistanceMark"
+	mark.top_level = true
+	add_child(mark)
+	mark.global_transform = Transform3D.IDENTITY
+	var stroke := BoxMesh.new()
+	stroke.size = Vector3(0.16, 0.006, 1.0)
+	var chalk := FootballArt.marker(Color("fcf3d1"))
+	for index in range(WALL_SEGMENTS):
+		var segment := FootballArt.mesh(mark, stroke, chalk)
+		segment.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		segment.hide()
+		_wall_segments.append(segment)
 	_animate(0.0)
 
 
@@ -117,6 +140,7 @@ func can_see_contact(spot: Vector3) -> bool:
 
 
 func signal_restart(spot: Vector3, direction: Vector3, indirect: bool) -> void:
+	_clear_wall()
 	signal_kind = "indirect" if indirect else "restart"
 	_signal_raised = indirect
 	card_color = ""
@@ -138,18 +162,73 @@ func show_card(color: String, contact: Vector3) -> void:
 	_card.show()
 
 
+func prepare_wall(ball_spot: Vector3, goalward: Vector3, distance: float) -> void:
+	_clear_wall()
+	var direction := Vector3(goalward.x, 0.0, goalward.z).normalized()
+	if direction == Vector3.ZERO or distance < 0.1:
+		return
+	var center := Vector3(ball_spot.x, WALL_MARK_HEIGHT, ball_spot.z)
+	wall_mark_position = center + direction * distance
+	var half_angle := minf(0.4, 1.8 / distance)
+	var stand_angle := half_angle + 0.9 / distance
+	var stand_a := center + direction.rotated(Vector3.UP, -stand_angle) * distance
+	var stand_b := center + direction.rotated(Vector3.UP, stand_angle) * distance
+	var reverse := position.distance_squared_to(stand_b) < position.distance_squared_to(stand_a)
+	_wall_target = stand_b if reverse else stand_a
+	_wall_target = Vector3(clampf(_wall_target.x, -49.0, 49.0), 0.0, clampf(_wall_target.z, -31.0, 31.0))
+	var first_angle := half_angle if reverse else -half_angle
+	for index in range(WALL_SEGMENTS):
+		var start_angle := lerpf(first_angle, -first_angle, float(index) / WALL_SEGMENTS)
+		var end_angle := lerpf(first_angle, -first_angle, float(index + 1) / WALL_SEGMENTS)
+		var start := center + direction.rotated(Vector3.UP, start_angle) * distance
+		var finish := center + direction.rotated(Vector3.UP, end_angle) * distance
+		var segment := _wall_segments[index]
+		segment.position = start.lerp(finish, 0.5)
+		segment.rotation.y = atan2(finish.x - start.x, finish.z - start.z)
+		segment.scale.z = start.distance_to(finish) + 0.02
+	_wall_pending = true
+
+
 func hold_position(delta: float) -> void:
+	if _wall_pending and _wall_draw_time < 0.0:
+		var offset := _wall_target - position
+		if offset.length_squared() <= 0.20 * 0.20 and _velocity.length_squared() <= 0.5 * 0.5:
+			_wall_draw_time = 0.0
+		else:
+			var pace := lerpf(WALL_WALK_PACE, 5.6, smoothstep(3.0, 10.0, offset.length()))
+			_velocity = _velocity.move_toward((offset * 2.0).limit_length(pace), 8.0 * delta)
+			_move_and_pose(delta, offset)
+			return
+	if _wall_pending:
+		_wall_draw_time = minf(WALL_DRAW_DURATION, _wall_draw_time + delta)
+		var count := ceili(WALL_SEGMENTS * _wall_draw_time / WALL_DRAW_DURATION)
+		for index in range(count):
+			_wall_segments[index].show()
+		if _wall_draw_time >= WALL_DRAW_DURATION:
+			wall_marked = true
+			_wall_pending = false
 	_velocity = _velocity.move_toward(Vector3.ZERO, 12.0 * delta)
-	_move_and_pose(delta, _signal_spot - position)
+	var look := wall_mark_position if _wall_pending else _signal_spot
+	_move_and_pose(delta, look - position)
 
 
 func resume_play() -> void:
+	_clear_wall()
 	signal_kind = "play"
 	card_color = ""
 	_card.hide()
 	_signal_label.hide()
 	_has_ball_sample = false
 	_ball_speed_x = 0.0
+
+
+func _clear_wall() -> void:
+	wall_marked = false
+	wall_mark_position = Vector3.ZERO
+	_wall_pending = false
+	_wall_draw_time = -1.0
+	for segment in _wall_segments:
+		segment.hide()
 
 
 func _move_and_pose(delta: float, look: Vector3) -> void:
@@ -164,8 +243,9 @@ func _animate(delta: float) -> void:
 	var speed := _velocity.length()
 	_phase = fposmod(_phase + speed * delta / STRIDE, 1.0)
 	var gait := smoothstep(0.15, 1.0, speed)
-	_torso.position.y = 0.75 + 0.012 * sin(_phase * TAU * 2.0) * gait
-	_torso.rotation.x = -0.11 * gait
+	var drawing := sin(PI * _wall_draw_time / WALL_DRAW_DURATION) if _wall_pending and _wall_draw_time >= 0.0 else 0.0
+	_torso.position.y = 0.75 + 0.012 * sin(_phase * TAU * 2.0) * gait - 0.20 * drawing
+	_torso.rotation.x = -0.11 * gait - 0.46 * drawing
 	_signal_weight = move_toward(_signal_weight, 0.0 if signal_kind == "play" else 1.0, 5.5 * delta)
 	for index in range(2):
 		var side := -1.0 if index == 0 else 1.0
@@ -177,6 +257,12 @@ func _animate(delta: float) -> void:
 		_pose_leg(index, Vector3(side * 0.107, foot_y, foot_z * gait))
 		_arms[index].rotation = Vector3(sin(cycle * TAU) * 0.60 * gait, 0.0, side * 0.13)
 		_elbows[index].rotation.x = lerpf(0.27, 0.98, gait)
+	if drawing > 0.0:
+		var stroke_index := mini(floori(WALL_SEGMENTS * _wall_draw_time / WALL_DRAW_DURATION), WALL_SEGMENTS - 1)
+		var toward_mark := _wall_segments[stroke_index].global_position - _arms[0].global_position
+		var point_at_turf := Quaternion(Vector3.DOWN, (_torso.global_basis.inverse() * toward_mark).normalized())
+		_arms[0].quaternion = _arms[0].quaternion.slerp(point_at_turf, drawing)
+		_elbows[0].rotation.x = lerpf(_elbows[0].rotation.x, 0.06, drawing)
 	if _signal_weight > 0.0:
 		if _signal_raised:
 			# Keep the arm lifting forward even when the jogging swing is behind the body.

@@ -1202,6 +1202,9 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "")
 	var inward := Vector3(-signf(spot.x) if kind != "throw_in" else 0.0, 0.0, -signf(spot.z) if kind != "goal_kick" else 0.0).normalized()
 	if kind in ["direct_free_kick", "indirect_free_kick", "penalty"]:
 		inward = Vector3.RIGHT * taker.attack_sign()
+	var goal_offset := FootballReception.flat(Vector3(taker.attack_sign() * ElevenPitch.HALF_LENGTH, 0.0, 0.0) - spot)
+	if kind == "direct_free_kick":
+		inward = goal_offset.normalized()
 	if kind == "penalty":
 		_set_penalty_positions(taker)
 	var stance_distance := 0.8 if kind == "throw_in" else 0.55
@@ -1227,6 +1230,14 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "")
 		_select(field.find(taker))
 	restart = {"kind": kind, "taker": taker, "inward": inward, "remaining": 4.0 if human else 1.0, "human": human}
 	referee.signal_restart(spot, Vector3.RIGHT * taker.attack_sign(), kind == "indirect_free_kick")
+	if kind == "direct_free_kick" and goal_offset.length() <= 31.0 and inward.x * taker.attack_sign() > 0.55:
+		var manual_defender := controlled if team == 1 and decision_driver == null and not acceptance else null
+		var wall := ElevenWall.new(spot, inward, outfield_teams[1 - team], manual_defender)
+		if wall.members.size() >= 3:
+			restart.wall = wall
+			restart.wall_setup_remaining = 8.0
+			restart.manual_defender = manual_defender
+			referee.prepare_wall(spot, inward, ElevenWall.MIN_DISTANCE)
 	_record(kind, taker)
 	var hint := "  /  CROSS OR SPACE TO TAKE" if human else ""
 	if human and kind in ["direct_free_kick", "penalty"]:
@@ -1234,6 +1245,9 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "")
 	var banner := kind.replace("_", " ").to_upper()
 	if not notice.is_empty():
 		banner = notice + "  /  " + banner
+	restart.banner = banner + hint
+	if restart.has("wall"):
+		hint = "  /  REFEREE SETTING THE WALL"
 	hud.flash(banner + hint, 3.0)
 
 func _set_penalty_positions(taker: FootballPlayer) -> void:
@@ -1267,6 +1281,28 @@ func _request_restart_strike(direction: Vector3, kind: String, speed: float, lif
 	restart.strike_lift = lift
 
 func _tick_restart(delta: float) -> void:
+	if restart.has("wall"):
+		var wall: ElevenWall = restart.wall
+		var taker_team: int = restart.taker.team
+		var manual_defender: FootballPlayer = restart.manual_defender
+		if manual_defender != null:
+			var movement := Input.get_vector("left", "right", "up", "down")
+			manual_defender.intent = Vector3(movement.x, 0.0, movement.y)
+			if movement.length_squared() > 0.04:
+				manual_defender.aim = manual_defender.intent.normalized()
+		var wall_ready := wall.update_positions(outfield_teams[1 - taker_team], manual_defender)
+		var attackers_clear := wall.clear_attacking_players(outfield_teams[taker_team], restart.taker)
+		if not bool(restart.get("wall_ready", false)):
+			restart.wall_setup_remaining -= delta
+			if not (wall_ready and attackers_clear and referee.wall_marked) and float(restart.wall_setup_remaining) > 0.0:
+				return
+			restart.wall_ready = true
+			_record("wall_ready", restart.taker, {"formed": wall_ready, "marked": referee.wall_marked})
+			sound.play_event("whistle")
+			var notice: String = restart.banner
+			if manual_defender != null and FootballReception.flat(manual_defender.global_position - wall.spot).length() < ElevenWall.MIN_DISTANCE:
+				notice += "  /  BACK UP 9.15 M"
+			hud.flash(notice, 3.0)
 	if restart.has("throw_direction"):
 		_tick_throw_in(delta)
 		return
