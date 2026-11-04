@@ -8,6 +8,7 @@ const SHIN_LENGTH := 0.40
 const SIGHT_RANGE := 27.0
 
 var signal_kind := "play"
+var card_color := ""
 var _velocity := Vector3.ZERO
 var _last_ball := Vector3.ZERO
 var _has_ball_sample := false
@@ -16,11 +17,14 @@ var _trail_sign := 1.0
 var _flank := 1.0
 var _signal_direction := Vector3.RIGHT
 var _signal_spot := Vector3.ZERO
-var _signal_indirect := false
+var _signal_raised := false
 var _signal_weight := 0.0
 var _phase := 0.0
 var _torso: Node3D
 var _signal_label: Label3D
+var _card: MeshInstance3D
+var _yellow_card: Material
+var _red_card: Material
 var _arms: Array[Node3D] = []
 var _elbows: Array[Node3D] = []
 var _thighs: Array[Node3D] = []
@@ -69,6 +73,13 @@ func _ready() -> void:
 		_thighs.append(thigh)
 		_knees.append(knee)
 		_boots.append(boot)
+	_yellow_card = FootballArt.marker(Color("ffdf23"))
+	_red_card = FootballArt.marker(Color("ff344b"))
+	_card = FootballArt.box(_elbows[1], Vector3(0.18, 0.24, 0.025), Vector3(0.0, -0.326, 0.0), _yellow_card)
+	_card.name = "DisciplineCard"
+	_card.rotation.y = 0.35
+	_card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_card.hide()
 	_animate(0.0)
 
 
@@ -107,12 +118,24 @@ func can_see_contact(spot: Vector3) -> bool:
 
 func signal_restart(spot: Vector3, direction: Vector3, indirect: bool) -> void:
 	signal_kind = "indirect" if indirect else "restart"
-	_signal_indirect = indirect
+	_signal_raised = indirect
+	card_color = ""
+	_card.hide()
 	_signal_label.show()
 	_signal_spot = spot
 	var flat := Vector3(direction.x, 0.0, direction.z)
 	if flat.length_squared() > 0.001:
 		_signal_direction = flat.normalized()
+
+
+func show_card(color: String, contact: Vector3) -> void:
+	if color != "yellow" and color != "red":
+		return
+	card_color = color
+	_signal_spot = contact
+	_signal_raised = true
+	_card.material_override = _yellow_card if color == "yellow" else _red_card
+	_card.show()
 
 
 func hold_position(delta: float) -> void:
@@ -122,6 +145,8 @@ func hold_position(delta: float) -> void:
 
 func resume_play() -> void:
 	signal_kind = "play"
+	card_color = ""
+	_card.hide()
 	_signal_label.hide()
 	_has_ball_sample = false
 	_ball_speed_x = 0.0
@@ -153,10 +178,12 @@ func _animate(delta: float) -> void:
 		_arms[index].rotation = Vector3(sin(cycle * TAU) * 0.60 * gait, 0.0, side * 0.13)
 		_elbows[index].rotation.x = lerpf(0.27, 0.98, gait)
 	if _signal_weight > 0.0:
-		var gesture := Quaternion.from_euler(Vector3(PI + 0.11 * gait, 0.0, 0.12))
-		if not _signal_indirect:
-			gesture = Quaternion(Vector3.DOWN, (_torso.global_basis.inverse() * _signal_direction).normalized())
-		_arms[1].quaternion = _arms[1].quaternion.slerp(gesture, _signal_weight)
+		if _signal_raised:
+			# Keep the arm lifting forward even when the jogging swing is behind the body.
+			_arms[1].rotation = _arms[1].rotation.lerp(Vector3(PI + 0.11 * gait, 0.0, 0.12), _signal_weight)
+		else:
+			var point := Quaternion(Vector3.DOWN, (_torso.global_basis.inverse() * _signal_direction).normalized())
+			_arms[1].quaternion = _arms[1].quaternion.slerp(point, _signal_weight)
 		_elbows[1].rotation.x = lerpf(_elbows[1].rotation.x, 0.08, _signal_weight)
 
 

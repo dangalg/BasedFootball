@@ -9,6 +9,8 @@ const TEAM_PRESS_RANGE := 12.0
 const HALFTIME_SECONDS := 3.0
 const GOAL_CELEBRATION_SECONDS := 1.6
 const FOUL_MIN_SLIDE_SPEED := 2.1
+const CAUTION_SLIDE_SPEED := 6.0
+const DISMISSAL_SLIDE_SPEED := 10.5
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
 const ELEVEN_ANCHORS: Array[Vector2] = [
@@ -41,6 +43,7 @@ var indirect_spot := Vector3.ZERO
 var indirect_taker: FootballPlayer
 var pending_foul: Dictionary = {}
 var players: Array[FootballPlayer] = []
+var sent_off_players: Array[FootballPlayer] = []
 var home_outfield: Array[FootballPlayer] = []
 var away_outfield: Array[FootballPlayer] = []
 var outfield_teams: Array = [home_outfield, away_outfield]
@@ -184,6 +187,7 @@ func _start_configured_match(seconds: float, difficulty: int, formation: int) ->
 	match_duration = seconds if seconds in [180.0, 360.0, 600.0] else DURATION
 	opponent_difficulty = clampi(difficulty, 0, 2)
 	home_formation = clampi(formation, 0, ELEVEN_FORMATIONS.size() - 1)
+	_restore_sent_off()
 	_set_ends_swapped(false)
 	var anchors: Array = ELEVEN_FORMATIONS[home_formation]
 	for player in home_outfield:
@@ -544,7 +548,7 @@ func _set_ends_swapped(swapped: bool) -> void:
 	if ends_swapped == swapped:
 		return
 	ends_swapped = swapped
-	for player in players:
+	for player: FootballPlayer in players + sent_off_players:
 		player.ends_swapped = swapped
 		player.eleven_home *= Vector3(-1.0, 1.0, -1.0)
 
@@ -937,7 +941,8 @@ func _on_physical_event(kind: String, detail: Dictionary, player: FootballPlayer
 func _review_slide_contact(player: FootballPlayer, detail: Dictionary) -> void:
 	if phase != "playing" or not restart.is_empty() or kickoff_remaining > 0.0 or is_instance_valid(kickoff_taker) or pending_indirect_player != null or not pending_foul.is_empty():
 		return
-	if bool(detail.ball_first) or float(detail.speed) < FOUL_MIN_SLIDE_SPEED:
+	var speed := float(detail.speed)
+	if speed < FOUL_MIN_SLIDE_SPEED or (bool(detail.ball_first) and speed < DISMISSAL_SLIDE_SPEED):
 		return
 	var position := ball.global_position
 	if absf(position.x) > ElevenPitch.HALF_LENGTH + FootballBall.RADIUS or absf(position.z) > ElevenPitch.HALF_WIDTH + FootballBall.RADIUS:
@@ -960,11 +965,76 @@ func _award_foul() -> bool:
 	var penalty := spot.x * defended_end >= ElevenPitch.HALF_LENGTH - ElevenPitch.PENALTY_DEPTH and absf(spot.z) <= ElevenPitch.GOAL_HALF_WIDTH + ElevenPitch.PENALTY_DEPTH
 	var kind := "penalty" if penalty else "direct_free_kick"
 	_record("foul", offender, {"victim": pending_foul.victim, "spot": _vec(spot), "speed": pending_foul.speed, "restart": kind})
+	var card := _discipline_slide(offender, float(pending_foul.speed))
+	if outfield_teams[offender.team].size() < 6:
+		pending_foul.clear()
+		_finish_match(offender.team)
+		return true
 	if penalty:
 		spot = Vector3(defended_end * (ElevenPitch.HALF_LENGTH - ElevenPitch.PENALTY_SPOT), FootballBall.RADIUS, 0.0)
-	_begin_restart(kind, 1 - offender.team, spot)
+	var notice := ""
+	if not card.is_empty():
+		notice = card.to_upper() + " CARD  /  " + offender.player_name.to_upper()
+	_begin_restart(kind, 1 - offender.team, spot, notice)
+	if not card.is_empty():
+		referee.show_card(card, contact)
 	sound.play_event("whistle")
 	return true
+
+func _discipline_slide(offender: FootballPlayer, speed: float) -> String:
+	if speed >= DISMISSAL_SLIDE_SPEED:
+		_send_off(offender, "excessive_force")
+		return "red"
+	if speed < CAUTION_SLIDE_SPEED:
+		return ""
+	offender.yellow_cards += 1
+	_record("card", offender, {"color": "yellow", "reason": "reckless_slide"})
+	if offender.yellow_cards < 2:
+		return "yellow"
+	_send_off(offender, "second_yellow")
+	return "red"
+
+func _send_off(player: FootballPlayer, reason: String) -> void:
+	_record("card", player, {"color": "red", "reason": reason})
+	_record("sent_off", player, {"reason": reason})
+	player.reset_action()
+	player.sent_off = true
+	player.selected = false
+	player.hide()
+	player.freeze = true
+	player.collision_layer = 0
+	player.collision_mask = 0
+	player.set_physics_process(false)
+	players.erase(player)
+	outfield_teams[player.team].erase(player)
+	sent_off_players.append(player)
+	if player == controlled:
+		_select(selected_index)
+	else:
+		selected_index = home_outfield.find(controlled)
+
+func _restore_sent_off() -> void:
+	if sent_off_players.is_empty():
+		return
+	for player in sent_off_players:
+		player.sent_off = false
+		player.freeze = false
+		player.collision_layer = 1
+		player.collision_mask = 1
+		player.set_physics_process(true)
+		player.show()
+		players.append(player)
+		outfield_teams[player.team].append(player)
+	for field: Array in outfield_teams:
+		field.sort_custom(func(a: FootballPlayer, b: FootballPlayer) -> bool: return a.eleven_slot < b.eleven_slot)
+	players.sort_custom(func(a: FootballPlayer, b: FootballPlayer) -> bool:
+		if a.is_goalkeeper != b.is_goalkeeper:
+			return not a.is_goalkeeper
+		if a.team != b.team:
+			return a.team < b.team
+		return a.eleven_slot < b.eleven_slot
+	)
+	sent_off_players.clear()
 
 func _control_ball() -> FootballPlayer:
 	if not ball.grip_holder_id.is_empty():
@@ -1101,7 +1171,7 @@ func throw_entering_pitch() -> bool:
 	var point := ball.global_position
 	return throw_entry_time > 0.0 and point.z * throw_entry_side > ElevenPitch.HALF_WIDTH - FootballBall.RADIUS and ball.linear_velocity.z * throw_entry_side < 0.0 and absf(point.x) <= ElevenPitch.HALF_LENGTH + FootballBall.RADIUS
 
-func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
+func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "") -> void:
 	_clear_offside()
 	pending_foul.clear()
 	indirect_taker = null
@@ -1161,7 +1231,10 @@ func _begin_restart(kind: String, team: int, spot: Vector3) -> void:
 	var hint := "  /  CROSS OR SPACE TO TAKE" if human else ""
 	if human and kind in ["direct_free_kick", "penalty"]:
 		hint = "  /  HOLD CIRCLE OR J TO SHOOT"
-	hud.flash(kind.replace("_", " ").to_upper() + hint, 3.0)
+	var banner := kind.replace("_", " ").to_upper()
+	if not notice.is_empty():
+		banner = notice + "  /  " + banner
+	hud.flash(banner + hint, 3.0)
 
 func _set_penalty_positions(taker: FootballPlayer) -> void:
 	var attack := taker.attack_sign()
@@ -1314,7 +1387,7 @@ func _tick_throw_in(delta: float) -> void:
 	restart.clear()
 	referee.resume_play()
 
-func _finish_match() -> void:
+func _finish_match(abandoned_team: int = -1) -> void:
 	reception.reset(ball)
 	for keeper: FootballPlayer in keepers:
 		(keeper as FootballGoalkeeper).drop_ball("full_time")
@@ -1323,16 +1396,21 @@ func _finish_match() -> void:
 	for player in players:
 		player.intent = Vector3.ZERO
 		player.sprint = false
-	var report := squad.finish(players)
+	var report := squad.finish(players + sent_off_players) if abandoned_team < 0 else "%s has fewer than seven active players." % ("Home" if abandoned_team == 0 else "Away")
 	var hint := "Cross / Enter  REMATCH     •     Q  EXIT"
 	if eleven_a_side:
 		hint = "Cross / Enter  REMATCH     •     Triangle / M  SETUP     •     Q  EXIT"
-	hud.show_overlay("FULL TIME  /  %d : %d" % [scores[0], scores[1]], "Your squad is growing through play.\n\n" + report, hint)
+	if abandoned_team < 0:
+		hud.show_overlay("FULL TIME  /  %d : %d" % [scores[0], scores[1]], "Your squad is growing through play.\n\n" + report, hint)
+		_record("full_time", null, {"score": scores.duplicate(), "save_error": squad.last_error})
+	else:
+		hud.show_overlay("MATCH ABANDONED", report, hint)
+		_record("match_abandoned", null, {"team": abandoned_team, "score": scores.duplicate()})
 	sound.play_event("whistle")
-	_record("full_time", null, {"score": scores.duplicate(), "save_error": squad.last_error})
 	match_finished.emit()
 
 func rematch() -> void:
+	_restore_sent_off()
 	_set_ends_swapped(false)
 	remaining = match_duration
 	action_log.clear()
@@ -1344,6 +1422,7 @@ func rematch() -> void:
 	squad.apply_to(keepers[0], _outfield_count())
 	for player in players:
 		player.energy = 1.0
+		player.yellow_cards = 0
 		player.active_seconds = 0
 		player.match_touches = 0
 	reset_positions(0)

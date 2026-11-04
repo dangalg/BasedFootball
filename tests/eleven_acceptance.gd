@@ -7,7 +7,7 @@ extends SceneTree
 const SCENE_PATH := "res://scenes/eleven_match.tscn"
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
 const MATCH_SECONDS := 180.0
-const RESTARTS := ["kickoff", "throw_in", "corner", "goal_kick"]
+const RESTARTS := ["kickoff", "throw_in", "corner", "goal_kick", "indirect_free_kick", "direct_free_kick", "penalty"]
 const DELIVERIES := ["pass", "through", "lob"]
 const SEED := 81100
 
@@ -194,7 +194,7 @@ func _opening_depths(field: Array, side: float) -> Dictionary:
 	return {"anchor_depths_m": anchors, "live_depths_m": live}
 
 
-func _measure_roster() -> Dictionary:
+func _measure_roster(allow_dismissals: bool = false) -> Dictionary:
 	var teams: Array[int] = [0, 0]
 	var keepers: Array[int] = [0, 0]
 	var ids: Dictionary = {}
@@ -212,9 +212,15 @@ func _measure_roster() -> Dictionary:
 			var field: Array = _game.home_outfield if player.team == 0 else _game.away_outfield
 			valid = valid and player in field
 	var outfield: Array[int] = [_game.home_outfield.size(), _game.away_outfield.size()]
-	valid = valid and teams == [11, 11] and keepers == [1, 1] and outfield == [10, 10]
-	valid = valid and _game.players.size() == 22 and _game.keepers.size() == 2
-	return {"valid": valid, "players": _game.players.size(), "teams": teams, "keepers": keepers, "outfield": outfield}
+	var dismissed: Array[int] = [0, 0]
+	for player: FootballPlayer in _game.sent_off_players:
+		valid = valid and allow_dismissals and player.sent_off and not ids.has(player.player_id)
+		dismissed[player.team] += 1
+		ids[player.player_id] = true
+	for team in range(2):
+		valid = valid and teams[team] == outfield[team] + keepers[team] and outfield[team] + dismissed[team] == 10
+	valid = valid and keepers == [1, 1] and ids.size() == 22 and _game.keepers.size() == 2
+	return {"valid": valid, "players": _game.players.size(), "teams": teams, "keepers": keepers, "outfield": outfield, "dismissed": dismissed}
 
 
 func _spread(field: Array) -> Vector2:
@@ -396,7 +402,7 @@ func _finish() -> void:
 	_halftime["kickoff"] = second_half_kickoff
 	var checks := {
 		"full_time": _game.phase == "finished" and is_zero_approx(float(_game.remaining)) and counts.get("full_time", 0) == 1,
-		"roster_at_full_time": _measure_roster()["valid"],
+		"roster_at_full_time": _measure_roster(true)["valid"],
 		"finite_physics": _finite and _shape_samples > 0,
 		"live_ball_actions": deliveries > 0 and counts.get("touch", 0) > 0,
 		"both_teams_shoot": shots_on_contact[0] > 0 and shots_on_contact[1] > 0,

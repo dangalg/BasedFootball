@@ -2,6 +2,7 @@ extends SceneTree
 
 ## --headless --script res://tests/eleven_foul_acceptance.gd
 ## -- --eleven-acceptance --report=<fresh absolute JSON path>
+## --discipline-acceptance checks two midfield cautions and rematch restoration.
 
 const MATCH := preload("res://scenes/eleven_match.tscn")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
@@ -30,15 +31,18 @@ func _run() -> void:
 		push_error("Expected the isolated eleven-a-side match and referee without the setup menu.")
 		quit(2)
 		return
-	var midfield := await _exercise(game, false)
-	game.queue_free()
-	await process_frame
-	game = MATCH.instantiate() as Node3D
-	root.add_child(game)
-	current_scene = game
-	_slide_contact.clear()
-	var penalty := await _exercise(game, true)
-	var report := {"passed": midfield.passed and penalty.passed, "midfield": midfield, "penalty": penalty}
+	var report: Dictionary
+	if "--discipline-acceptance" in arguments:
+		report = await _exercise_discipline(game)
+	else:
+		var midfield := await _exercise(game, false)
+		game.queue_free()
+		await process_frame
+		game = MATCH.instantiate() as Node3D
+		root.add_child(game)
+		current_scene = game
+		var penalty := await _exercise(game, true)
+		report = {"passed": midfield.passed and penalty.passed, "midfield": midfield, "penalty": penalty}
 	if FileAccess.file_exists(report_path):
 		push_error("Report already exists at %s" % report_path)
 		quit(2)
@@ -54,7 +58,57 @@ func _run() -> void:
 	quit(0 if report["passed"] else 1)
 
 
+func _exercise_discipline(game: Node3D) -> Dictionary:
+	var offender: FootballPlayer = game.away_outfield[0]
+	var original_roster := _player_ids(game.players)
+	var original_away := _player_ids(game.away_outfield)
+	var expected_roster := original_roster.duplicate()
+	var expected_away := original_away.duplicate()
+	expected_roster.erase(offender.player_id)
+	expected_away.erase(offender.player_id)
+	var first := await _exercise(game, false)
+	var first_yellow: bool = _card_receipts(first["match_action_log"], offender.player_id) == ["yellow/reckless_slide"] and first["restart"].get("card_color", "") == "yellow" and offender.yellow_cards == 1 and offender in game.players and not offender in game.sent_off_players
+	var second: Dictionary = {}
+	if first_yellow:
+		# Reposition for the same kind of contact without clearing match discipline.
+		game.reset_positions(0)
+		second = await _exercise(game, false)
+	var second_events: Array = second.get("match_action_log", [])
+	var dismissed: bool = offender.sent_off and offender in game.sent_off_players and not offender in game.players and not offender in game.away_outfield
+	var removed_from_simulation := offender.collision_layer == 0 and offender.collision_mask == 0 and offender.freeze and not offender.visible and not offender.is_physics_processing()
+	var no_replacement := _player_ids(game.players) == expected_roster and _player_ids(game.away_outfield) == expected_away
+	var selection_valid: bool = game.controlled != offender and game.controlled in game.home_outfield and game.controlled.selected
+	var sent_off := _event(second_events, "sent_off", offender.player_id)
+	var second_yellow: bool = _card_receipts(second_events, offender.player_id) == ["yellow/reckless_slide", "red/second_yellow"] and second.get("restart", {}).get("card_color", "") == "red" and offender.yellow_cards == 2 and sent_off.get("reason", "") == "second_yellow"
+	var dismissal_state := {
+		"roster": _player_ids(game.players), "away_outfield": _player_ids(game.away_outfield),
+		"yellow_cards": offender.yellow_cards, "collision_layer": offender.collision_layer,
+		"collision_mask": offender.collision_mask, "physics_processing": offender.is_physics_processing(),
+		"sent_off": offender.sent_off, "visible": offender.visible, "frozen": offender.freeze,
+	}
+	game.rematch()
+	await physics_frame
+	var rematch_roster := _player_ids(game.players)
+	var rematch_away := _player_ids(game.away_outfield)
+	var restored: bool = rematch_roster == original_roster and rematch_away == original_away and game.sent_off_players.is_empty() and offender in game.players and offender.yellow_cards == 0 and not offender.sent_off and offender.visible and not offender.freeze and offender.collision_layer == 1 and offender.collision_mask == 1 and offender.is_physics_processing()
+	var checks := {
+		"first_physical_foul_and_restart": first["passed"],
+		"first_yellow_did_not_remove_player": first_yellow,
+		"second_physical_foul_and_restart": second.get("passed", false),
+		"second_yellow_led_to_red": second_yellow,
+		"offender_removed_without_replacement": dismissed and no_replacement and removed_from_simulation,
+		"active_selection_valid": selection_valid,
+		"rematch_restored_squad_and_reset_discipline": restored,
+	}
+	return {
+		"passed": not checks.values().has(false), "checks": checks, "offender": offender.player_id,
+		"first_foul": first, "second_foul": second, "dismissal_state": dismissal_state,
+		"rematch_roster": rematch_roster, "rematch_away_outfield": rematch_away,
+	}
+
+
 func _exercise(game: Node3D, penalty: bool) -> Dictionary:
+	_slide_contact.clear()
 	var victim: FootballPlayer = game.controlled
 	var attacker: FootballPlayer = game.away_outfield[0]
 	var ball: FootballBall = game.ball
@@ -76,7 +130,8 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 	referee.look_at(Vector3(origin.x, 0.0, origin.z), Vector3.UP)
 	victim.body_visual.rotation.y = -PI / 2.0
 	attacker.body_visual.rotation.y = PI / 2.0
-	attacker.physical_event.connect(_capture_slide.bind(victim, ball, referee))
+	var capture := _capture_slide.bind(victim, ball, referee)
+	attacker.physical_event.connect(capture)
 	var seed_serial := ball.touch_serial
 	var first_event: int = game.action_log.size()
 	game.kickoff_remaining = 0.0
@@ -93,13 +148,14 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 		await physics_frame
 		if restart_state.is_empty() and game.restart.get("kind") == restart_kind:
 			var taker: FootballPlayer = game.restart["taker"]
-			restart_state = {"team": taker.team, "taker": taker.player_id, "spot": _vector(ball.global_position), "ball_frozen": ball.freeze, "touch_serial": ball.touch_serial}
+			restart_state = {"team": taker.team, "taker": taker.player_id, "spot": _vector(ball.global_position), "ball_frozen": ball.freeze, "touch_serial": ball.touch_serial, "card_color": referee.card_color}
 			if penalty:
 				restart_state["keeper_x"] = game.keepers[1].global_position.x
 			clock_at_award = game.remaining
 		if not restart_state.is_empty() and game.restart.is_empty() and float(game.remaining) < clock_at_award - 0.08:
 			resumed = true
 			break
+	attacker.physical_event.disconnect(capture)
 	var events: Array = game.action_log.slice(first_event)
 	var foul := _event(events, "foul", attacker.player_id)
 	var taker_id := str(restart_state.get("taker", ""))
@@ -152,6 +208,22 @@ func _place(player: FootballPlayer, position: Vector3, aim: Vector3) -> void:
 	player.global_position = position
 	player.aim = aim
 	player.reset_physics_interpolation()
+
+
+func _player_ids(players: Array) -> Array[String]:
+	var ids: Array[String] = []
+	for player: FootballPlayer in players:
+		ids.append(player.player_id)
+	ids.sort()
+	return ids
+
+
+func _card_receipts(events: Array, player_id: String) -> Array[String]:
+	var receipts: Array[String] = []
+	for event: Dictionary in events:
+		if event.get("kind") == "card" and event.get("player") == player_id:
+			receipts.append("%s/%s" % [event.get("color", ""), event.get("reason", "")])
+	return receipts
 
 
 func _event(events: Array, kind: String, player_id: String, restart_kind: String = "", serial: int = -1) -> Dictionary:

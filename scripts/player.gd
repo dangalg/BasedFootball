@@ -28,6 +28,8 @@ const STEER_PREPARE_LEAD := 0.055
 
 var team: int = 0
 var ends_swapped := false
+var yellow_cards := 0
+var sent_off := false
 var player_id: String = ""
 var player_name: String = ""
 var shirt_number: int = 7
@@ -1095,7 +1097,7 @@ func _boot_distance(point: Vector3, start: Vector3, end: Vector3) -> float:
 
 func _slide_player_contacts(boot: Vector3) -> void:
 	for node in get_parent().get_children():
-		if not node is FootballPlayer or node == self or node.ragdoll != null or node.get_instance_id() in slide_victims:
+		if not node is FootballPlayer or node == self or node.sent_off or node.ragdoll != null or node.get_instance_id() in slide_victims:
 			continue
 		var other: FootballPlayer = node
 		var closest := INF
