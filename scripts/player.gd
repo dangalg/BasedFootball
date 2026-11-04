@@ -117,6 +117,7 @@ var dribble_steer: bool = false
 var dribble_phase: String = "idle"
 var dribble_follow_end: float = 0.0
 var chase_ball: FootballBall
+var shot_setup_ball: FootballBall
 var chase_remaining: float = 0.0
 var chase_touch_serial: int = -1
 var chase_peak_gap: float = 0.0
@@ -319,6 +320,10 @@ func _running_target_velocity(stride_remaining: float, future_time: float = 0.0)
 	if intent.length_squared() < 0.0025 and stop_stride_remaining > future_time and is_instance_valid(chase_ball) and chasing_ball(chase_ball):
 		return stop_stride_direction * stop_stride_speed
 	var desired := intent.limit_length(1.0) * speed
+	if future_time < INF and is_instance_valid(shot_setup_ball) and not jockey and upright_ready():
+		var setup_stride := _shot_setup_stride(desired)
+		if setup_stride != desired:
+			return setup_stride
 	if eleven_slot < 0 or not selected or jockey or desired.length_squared() < 0.09 or future_time >= chase_remaining or not chasing_ball(chase_ball):
 		return desired
 	if chase_ball.global_position.y > 0.4:
@@ -338,6 +343,26 @@ func _running_target_velocity(stride_remaining: float, future_time: float = 0.0)
 	var approach_speed := clampf((gap.dot(follow) - 0.48) * 5.0, -1.2, 3.0)
 	var max_speed := maxf(desired.length() * 0.55, roll.dot(follow) + approach_speed)
 	return follow * minf(desired.length(), max_speed)
+
+func _shot_setup_stride(desired: Vector3) -> Vector3:
+	var ball := shot_setup_ball
+	var gap := _flat(ball.global_position - global_position)
+	var roll := _flat(ball.linear_velocity)
+	if ball.freeze or not ball.grip_holder_id.is_empty() or ball.global_position.y > 0.32 or roll.length_squared() < 0.64:
+		return desired
+	var receiving := ball.pass_active and ball.pass_receiver_id == player_id and ball.last_touch_team == team
+	if ball.last_touch_id != player_id and not receiving:
+		return desired
+	var requested := desired.normalized()
+	if desired.length_squared() < 1.0 or gap.length_squared() > 1.65 * 1.65 or requested.dot(gap.normalized()) < 0.25:
+		return desired
+	# Gather toward the roll with one shorter stride. The input direction
+	# remains available to aim the shot independently on release.
+	var intercept := gap + roll * 0.10
+	var correction := requested.signed_angle_to(intercept.normalized(), Vector3.UP)
+	var follow := requested.rotated(Vector3.UP, clampf(correction, -0.45, 0.45))
+	var pace_match := roll.dot(follow) + (gap.dot(follow) - 0.55) * 5.0
+	return follow * clampf(pace_match, desired.length() * 0.55, desired.length() + 0.45)
 
 func _running_acceleration(velocity: Vector3, desired: Vector3) -> Vector3:
 	return ((desired - velocity) * 7.5).limit_length(24.0)
@@ -1216,6 +1241,7 @@ func reset_action() -> void:
 	# Restarts reset action state as well as transforms, including a lowered slide.
 	action_kind = ""
 	action_elapsed = 0
+	shot_setup_ball = null
 	kick_impact_time = -1.0
 	tackle_remaining = 0
 	tackle_cooldown = 0

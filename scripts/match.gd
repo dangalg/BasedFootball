@@ -523,6 +523,7 @@ func _select(index: int) -> void:
 	pass_call_remaining = 0.0
 	if controlled != null:
 		controlled.jockey = false
+		controlled.shot_setup_ball = null
 	selected_index = clampi(index, 0, home_outfield.size()-1)
 	controlled = home_outfield[selected_index]
 	for player in players:
@@ -596,6 +597,8 @@ func _tick_halftime(delta: float) -> void:
 	_record("half_started", null, {"half": 2, "score": scores.duplicate(), "home_attack_sign": controlled.attack_sign(), "kickoff_team": kickoff_team})
 
 func _physics_process(delta: float) -> void:
+	if controlled != null:
+		controlled.shot_setup_ball = null
 	if phase == "halftime":
 		_tick_halftime(delta)
 		return
@@ -894,6 +897,8 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		shot_buffer_remaining = maxf(0.0, shot_buffer_remaining - delta)
 		if shot_buffer_remaining == 0.0:
 			_record("shot_buffer_expired", controlled)
+	if eleven_a_side and (charging or shot_buffer_remaining > 0.0):
+		controlled.shot_setup_ball = ball
 	if pressed.get("square", false):
 		if _attacking_contact():
 			_request_delivery("lob", 12.5, 5.2)
