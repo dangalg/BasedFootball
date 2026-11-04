@@ -32,6 +32,17 @@ var _gait_swing_basis := Basis.IDENTITY
 var _gait_last_root := Vector3.ZERO
 var _gait_anchors: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
 var _gait_bases: Array[Basis] = [Basis.IDENTITY, Basis.IDENTITY]
+var _contact_support_foot := -1
+var _contact_kicking := false
+var _contact_last_elapsed := 0.0
+var _contact_support_start := Vector3.ZERO
+var _contact_support_start_basis := Basis.IDENTITY
+var _contact_support_anchor := Vector3.ZERO
+var _contact_support_basis := Basis.IDENTITY
+var _contact_support_ready_at := 0.0
+var _contact_support_released_at := -1.0
+var _contact_support_planted := false
+var _contact_last_root := Vector3.ZERO
 var head_pivot: Node3D
 var _celebration_start: Array[Quaternion] = []
 var _tactical_marker: MeshInstance3D
@@ -163,8 +174,18 @@ func animate(player: Node3D, delta: float) -> void:
 		else:
 			touch_weight = 1 - smoothstep(player.dribble_follow_end - 0.075, player.dribble_follow_end, player.dribble_elapsed)
 	var rising: bool = not sliding and player.body_visual.position.y < -0.25 and player.recovery_remaining > 0
-	var grounded_gait: bool = player.eleven_slot >= 0 and not player.is_goalkeeper and player.action_kind == "" and not touching \
+	var upright_outfield: bool = player.eleven_slot >= 0 and not player.is_goalkeeper \
 		and not rising and not player.hop_active and not player.getting_up and player.throw_in_phase < 0.0
+	var grounded_gait: bool = upright_outfield and player.action_kind == "" and not touching
+	var coordinated_contact: bool = upright_outfield and (kicking or (player.action_kind == "" and touching and not sole_stopping))
+	var strike_right: bool = player.kick_foot_right if kicking else player.dribble_foot_right
+	var contact_elapsed: float = player.action_elapsed if kicking else player.dribble_elapsed
+	var contact_time: float = player.kick_contact_time if kicking else player.dribble_contact_time
+	if coordinated_contact:
+		_prepare_contact_support(player, not strike_right, kicking, contact_elapsed, contact_time)
+	elif not grounded_gait:
+		_contact_support_foot = -1
+		_contact_support_planted = false
 	player.body_visual.rotation.x = 0
 	player.body_visual.rotation.z = 0
 	var lower := smoothstep(0, 0.10, player.action_elapsed) if sliding else 0.0
@@ -180,12 +201,12 @@ func animate(player: Node3D, delta: float) -> void:
 	elif grounded_gait:
 		hip_offset = -lerpf(0.133, 0.186, smoothstep(0.15, 5.5, velocity.length()))
 	player.body_visual.position.y = lerpf(player.body_visual.position.y, hip_offset, minf(1, delta * HIP_RESPONSE))
-	upper_body.rotation.x = lerpf(upper_body.rotation.x, 0.85 if sliding or rising else local_velocity.z * 0.022 - (0.18 if standing or kicking else 0.0), minf(1, 18 * delta))
-	upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025, minf(1, 12 * delta))
 	# Jockeying can intentionally backpedal while looking at the ball.
 	var gait_direction := -1.0 if local_velocity.z > 0.1 else 1.0
 	if grounded_gait:
 		_pose_grounded_gait(player, velocity, delta)
+		_contact_support_foot = -1
+		_contact_support_planted = false
 	else:
 		_gait_active = false
 		player.step_phase += velocity.length() * delta * 2.7 * gait_direction
@@ -199,18 +220,26 @@ func animate(player: Node3D, delta: float) -> void:
 		right_knee.rotation = Vector3(-maxf(0, -right_swing) * 1.1, 0, 0)
 		left_boot.rotation = Vector3.ZERO
 		right_boot.rotation = Vector3.ZERO
-	left_arm.rotation = Vector3(-0.5 if sliding else -left_swing * 0.7, 0, -0.15)
-	right_arm.rotation = Vector3(-0.5 if sliding else -right_swing * 0.7, 0, 0.15)
-	# The athlete faces local -Z. Positive X flexion bends the forearms forward;
-	# a negative angle bent both elbows towards the back of the torso.
-	left_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
-	right_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
-	if kicking:
+	if grounded_gait or coordinated_contact:
+		var weight := 0.0
+		if coordinated_contact:
+			var release: float = player.action_duration if kicking else player.dribble_follow_end
+			weight = smoothstep(0.0, contact_time, contact_elapsed) * (1.0 - smoothstep(contact_time, release, contact_elapsed))
+		_pose_outfield_balance(local_velocity, player.step_phase, strike_right, weight * (1.0 if kicking else 0.52), delta)
+	else:
+		upper_body.rotation.x = lerpf(upper_body.rotation.x, 0.85 if sliding or rising else local_velocity.z * 0.022 - (0.18 if standing or kicking else 0.0), minf(1, 18 * delta))
+		upper_body.rotation.y = lerpf(upper_body.rotation.y, 0.0, minf(1, 12 * delta))
+		upper_body.rotation.z = lerpf(upper_body.rotation.z, -0.22 if shoulder else -local_velocity.x * 0.025, minf(1, 12 * delta))
+		left_arm.rotation = Vector3(-0.5 if sliding else -left_swing * 0.7, 0, -0.15)
+		right_arm.rotation = Vector3(-0.5 if sliding else -right_swing * 0.7, 0, 0.15)
+		left_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
+		right_elbow.rotation = Vector3(0.6 + stride * 0.3, 0, 0)
+	if kicking and not coordinated_contact:
 		var support_right: bool = not player.kick_foot_right
 		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04))
 	elif standing or rising:
 		_pose_foot(player, false, player.global_position + player.body_visual.basis * Vector3(-0.12, 0.075, 0.04))
-	elif touching and not sole_stopping:
+	elif touching and not sole_stopping and not coordinated_contact:
 		var support_right: bool = not player.dribble_foot_right
 		_pose_foot(player, support_right, player.global_position + player.body_visual.basis * Vector3(0.12 if support_right else -0.12, 0.075, 0.04), touch_weight)
 	if rising:
@@ -265,6 +294,8 @@ func animate(player: Node3D, delta: float) -> void:
 		left_knee.quaternion = _limit_rotation(previous_left_knee_rotation, left_knee.quaternion, delta * 18)
 	if sole_stopping:
 		_pose_sole_stop(player, touch_weight)
+	elif coordinated_contact:
+		_pose_contact_support(player, velocity, contact_elapsed)
 	_sole_planting = sole_stopping
 	if player.throw_in_phase >= 0.0:
 		_pose_throw_in(player, player.throw_in_phase)
@@ -273,6 +304,75 @@ func animate(player: Node3D, delta: float) -> void:
 func gait_plant_active(right: bool) -> bool:
 	var foot := int(right)
 	return _gait_active and _gait_swing_foot != foot and _gait_released_foot != foot
+
+
+func contact_support_active(right: bool) -> bool:
+	return _contact_support_planted and _contact_support_foot == int(right)
+
+
+func _prepare_contact_support(player: Node3D, right: bool, kicking: bool, elapsed: float, contact_time: float) -> void:
+	var foot := int(right)
+	var new_contact := _contact_support_foot != foot or _contact_kicking != kicking or elapsed < _contact_last_elapsed
+	_contact_last_elapsed = elapsed
+	if not new_contact:
+		return
+	var boot := right_boot if right else left_boot
+	var basis := _flat_body_basis(player)
+	var displacement: Vector3 = player._predict_running_displacement(maxf(0.0, contact_time - elapsed), kicking)
+	var stance: Vector3 = player.global_position + displacement + basis.x * (0.12 if right else -0.12)
+	stance.y = GAIT_ANKLE_HEIGHT
+	var previous_plant := gait_plant_active(right) or contact_support_active(right)
+	var previous_anchor := _gait_anchors[foot] if gait_plant_active(right) else _contact_support_anchor
+	var previous_basis := _gait_bases[foot] if gait_plant_active(right) else _contact_support_basis
+	var keep_plant := previous_plant and stance.distance_squared_to(previous_anchor) <= 0.25 * 0.25
+	_contact_support_foot = foot
+	_contact_kicking = kicking
+	_contact_support_start = boot.global_position
+	_contact_support_start_basis = boot.global_basis.orthonormalized()
+	_contact_support_anchor = previous_anchor if keep_plant else stance
+	_contact_support_basis = previous_basis if keep_plant else basis
+	_contact_support_ready_at = 0.0 if keep_plant else contact_time * 0.60
+	_contact_support_released_at = -1.0
+
+
+func _pose_contact_support(player: Node3D, velocity: Vector3, elapsed: float) -> void:
+	var right := _contact_support_foot == 1
+	var boot := right_boot if right else left_boot
+	var hip: Node3D = player.right_leg if right else player.left_leg
+	var plant_weight := smoothstep(0.0, _contact_support_ready_at, elapsed) if _contact_support_ready_at > 0.0 else 1.0
+	var target := _contact_support_start.lerp(_contact_support_anchor, plant_weight)
+	var boot_basis := _contact_support_start_basis.slerp(_contact_support_basis, plant_weight)
+	# A plant only lasts while the support leg can reach it. The striking boot
+	# still follows its original path and supplies the measured ball contact.
+	if _contact_support_released_at < 0.0 and plant_weight >= 1.0 and hip.global_position.distance_to(target) > 0.743:
+		_contact_support_released_at = elapsed
+	_contact_support_planted = plant_weight >= 1.0 and _contact_support_released_at < 0.0
+	if _contact_support_released_at >= 0.0:
+		var facing := _flat_body_basis(player)
+		var lift := smoothstep(0.0, 0.10, elapsed - _contact_support_released_at)
+		var recovery: Vector3 = player.global_position + facing.x * (0.12 if right else -0.12) + velocity * 0.028
+		recovery.y = GAIT_ANKLE_HEIGHT + 0.13
+		target = _contact_support_anchor.lerp(recovery, lift)
+		boot_basis = _contact_support_basis.slerp(facing * Basis(Vector3.RIGHT, -0.22), lift)
+	_pose_foot(player, right, target)
+	boot.global_basis = boot_basis
+	_contact_last_root = player.global_position
+
+
+func _pose_outfield_balance(velocity: Vector3, phase: float, strike_right: bool, strike_weight: float, delta: float) -> void:
+	var run := clampf(velocity.length() / 6.3, 0.0, 1.0)
+	var counter := sin(phase) * run * 0.72
+	var strike_side := 1.0 if strike_right else -1.0
+	var reaction := strike_side * strike_weight
+	var weight := minf(1.0, delta * 19.0)
+	upper_body.rotation.x = lerpf(upper_body.rotation.x, velocity.z * 0.033 - strike_weight * 0.16, weight)
+	upper_body.rotation.y = lerpf(upper_body.rotation.y, -counter * 0.30 - reaction * 0.24, weight)
+	upper_body.rotation.z = lerpf(upper_body.rotation.z, -velocity.x * 0.038 + reaction * 0.13, weight)
+	left_arm.rotation = left_arm.rotation.lerp(Vector3(-counter + reaction * 0.46, 0, -0.14 - strike_weight * 0.33), weight)
+	right_arm.rotation = right_arm.rotation.lerp(Vector3(counter - reaction * 0.46, 0, 0.14 + strike_weight * 0.33), weight)
+	var bend := 0.62 + run * 0.56 - strike_weight * 0.20
+	left_elbow.rotation.x = lerpf(left_elbow.rotation.x, bend - counter * 0.23, weight)
+	right_elbow.rotation.x = lerpf(right_elbow.rotation.x, bend + counter * 0.23, weight)
 
 
 func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> void:
@@ -297,6 +397,14 @@ func _pose_grounded_gait(player: Node3D, velocity: Vector3, delta: float) -> voi
 			offset.y = 0.0
 			_gait_anchors[foot] = homes[foot] + offset.limit_length(0.22)
 			_gait_bases[foot] = facing
+		if _contact_support_foot >= 0 and root.distance_squared_to(_contact_last_root) < 0.65 * 0.65:
+			var support := _contact_support_foot
+			if _contact_support_planted and homes[support].distance_squared_to(_contact_support_anchor) < 0.36 * 0.36:
+				_gait_anchors[support] = _contact_support_anchor
+				_gait_bases[support] = _contact_support_basis
+				_gait_next_foot = 1 - support
+			if feet[_gait_next_foot].global_position.y > GAIT_ANKLE_HEIGHT + 0.075:
+				_gait_released_foot = _gait_next_foot
 	_gait_last_root = root
 	if _gait_swing_foot < 0:
 		var next_foot := _gait_next_foot

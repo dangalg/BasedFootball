@@ -2,12 +2,14 @@ extends SceneTree
 
 ## Run in Movie Maker mode with --script res://tests/eleven_stride_acceptance.gd
 ## and -- --report=<fresh absolute JSON path>.
+## Add --moving-contact to record a running cut and shot on the same free ball.
 
 const MatchInput := preload("res://scripts/match.gd")
 const TURN := Vector3(0.422618, 0.0, 0.906308)
 const MAX_PLANT_DRIFT := 0.03
 const MAX_SOLE_HEIGHT := 0.035
 const MIN_PLANT_TICKS := 4
+const CUT_OBSERVATION_TICKS := 12
 
 class PoseProbe extends Node:
 	var sample: Callable
@@ -35,6 +37,10 @@ var _peak_ball_speed := 0.0
 var _finite := true
 var _free_ball := true
 var _framed := true
+var _moving_contact := false
+var _seed_serial := 0
+var _cut_frame := -1
+var _contact_results: Dictionary = {}
 
 
 func _initialize() -> void:
@@ -51,25 +57,13 @@ func _run() -> void:
 		quit(2)
 		return
 	_delta = 1.0 / float(Engine.physics_ticks_per_second)
+	_moving_contact = OS.get_cmdline_user_args().has("--moving-contact")
 	_build_fixture()
-	await _drive("Ready", Vector3.ZERO, false, 0.55)
-	await _drive("Walk", Vector3.RIGHT * 0.32, false, 2.80)
-	await _drive("Jog", Vector3.RIGHT * 0.80, false, 2.10)
-	await _drive("Sprint", Vector3.RIGHT, true, 2.10)
-	await _drive("Sprint turn", TURN, true, 1.25)
-	await _drive("Stop", Vector3.ZERO, false, 1.15)
-	# Place one settled ball for the contact check after the uninterrupted gait sequence.
-	_ball_start = _player.global_position + TURN * 0.53
-	_ball_start.y = FootballBall.RADIUS
-	_ball = FootballBall.new()
-	_ball.position = _ball_start
-	_world.add_child(_ball)
-	_adapter.ball = _ball
-	await _drive("Ball settles", Vector3.ZERO, false, 0.45)
-	await _drive("Charge shot", Vector3.ZERO, false, 0.30, {"primary": true})
-	await _drive("Kick", Vector3.ZERO, false, 0.60, {"primary_release": true})
-	_adapter.free()
-	var checks := _check_result()
+	if _moving_contact:
+		await _run_moving_contact()
+	else:
+		await _run_stride()
+	var checks := _check_moving_contact() if _moving_contact else _check_result()
 	var passed := not checks.values().has(false)
 	var file := FileAccess.open(report_path, FileAccess.WRITE)
 	if file == null:
@@ -79,6 +73,7 @@ func _run() -> void:
 	file.store_string(JSON.stringify({
 		"passed": passed,
 		"checks": checks,
+		"mode": "moving_contact" if _moving_contact else "stride",
 		"physics_hz": Engine.physics_ticks_per_second,
 		"actor": _player.player_id,
 		"plant_drift_limit_m": MAX_PLANT_DRIFT,
@@ -87,14 +82,58 @@ func _run() -> void:
 		"plants": _plants,
 		"events": _events,
 		"ball_start": _vector(_ball_start),
+		"seeded_incoming_roll_serial": _seed_serial,
 		"peak_ball_y_m": _peak_ball_y,
 		"peak_ball_speed_mps": _peak_ball_speed,
 		"impulse_audit": _ball.impulse_audit,
+		"match_actions": _adapter.action_log,
+		"moving_contacts": _contact_results,
 		"samples": _samples,
 	}, "\t") + "\n")
 	file.close()
+	_adapter.free()
 	print("ELEVEN_STRIDE_ACCEPTANCE %s %s" % ["PASS" if passed else "FAIL", report_path])
 	quit(0 if passed else 1)
+
+
+func _run_stride() -> void:
+	await _drive("Ready", Vector3.ZERO, false, 0.55)
+	await _drive("Walk", Vector3.RIGHT * 0.32, false, 2.80)
+	await _drive("Jog", Vector3.RIGHT * 0.80, false, 2.10)
+	await _drive("Sprint", Vector3.RIGHT, true, 2.10)
+	await _drive("Sprint turn", TURN, true, 1.25)
+	await _drive("Stop", Vector3.ZERO, false, 1.15)
+	# Place one settled ball for the contact check after the uninterrupted gait sequence.
+	_place_ball(TURN, 0.53)
+	await _drive("Ball settles", Vector3.ZERO, false, 0.45)
+	await _drive("Charge shot", Vector3.ZERO, false, 0.30, {"primary": true})
+	await _drive("Kick", Vector3.ZERO, false, 0.60, {"primary_release": true})
+
+
+func _cut_direction() -> Vector3:
+	return Vector3.RIGHT.rotated(Vector3.UP, deg_to_rad(38.0))
+
+
+func _run_moving_contact() -> void:
+	await _drive("Ready", Vector3.ZERO, false, 0.40)
+	await _drive("Approach", Vector3.RIGHT * 0.60, false, 0.80)
+	_place_ball(Vector3.RIGHT, 0.60)
+	# Seed the same incoming roll as the established cut drill, then leave the ball in physics.
+	_ball.touch(_player.team, _player.player_id, Vector3.RIGHT * (2.35 * _ball.mass))
+	_player._remember_free_ball(_ball, Vector3.RIGHT)
+	_seed_serial = _ball.touch_serial
+	var movement := _cut_direction() * 0.65
+	await _drive("Moving cut", movement, false, 0.55, {"primary": true}, true)
+	await _drive("Running shot", movement, false, 0.70, {"primary_release": true})
+
+
+func _place_ball(direction: Vector3, lead: float) -> void:
+	_ball_start = _player.global_position + direction * lead
+	_ball_start.y = FootballBall.RADIUS
+	_ball = FootballBall.new()
+	_ball.position = _ball_start
+	_world.add_child(_ball)
+	_adapter.ball = _ball
 
 
 func _build_fixture() -> void:
@@ -153,7 +192,7 @@ func _build_fixture() -> void:
 	_world.add_child(probe)
 
 
-func _drive(label: String, movement: Vector3, sprint: bool, seconds: float, actions: Dictionary = {}) -> void:
+func _drive(label: String, movement: Vector3, sprint: bool, seconds: float, actions: Dictionary = {}, observe_cut: bool = false) -> void:
 	_phase = {
 		"label": label, "start_frame": Engine.get_physics_frames(),
 		"start_time_s": Engine.get_physics_frames() * _delta,
@@ -171,7 +210,11 @@ func _drive(label: String, movement: Vector3, sprint: bool, seconds: float, acti
 	for tick in range(ticks):
 		if is_instance_valid(_ball):
 			_adapter._controller_actions(_delta, actions if tick == 0 else {})
+			if _moving_contact:
+				_adapter._control_ball()
 		await physics_frame
+		if observe_cut and _cut_frame >= 0 and Engine.get_physics_frames() > _cut_frame + CUT_OBSERVATION_TICKS:
+			break
 	for side in range(2):
 		_finish_plant(side)
 	_phase["end_time_s"] = Engine.get_physics_frames() * _delta
@@ -209,7 +252,11 @@ func _sample_pose() -> void:
 		grounded = grounded and all_points_near_ground
 		if not planted and points[0].y > MAX_SOLE_HEIGHT:
 			_phase[name + "_swing_samples"] += 1
-		sample[name] = {"planted": planted, "sole": _vector(points[0]), "toe": _vector(points[1]), "heel": _vector(points[2])}
+		var contact_support := _moving_contact and _player.visual_controller.contact_support_active(right)
+		sample[name] = {
+			"planted": planted, "contact_support": contact_support,
+			"sole": _vector(points[0]), "toe": _vector(points[1]), "heel": _vector(points[2]),
+		}
 	if grounded:
 		_phase["both_soles_grounded_samples"] += 1
 	_finite = _finite and _player.global_position.is_finite() and velocity.is_finite()
@@ -328,8 +375,103 @@ func _check_kick() -> bool:
 	return false
 
 
+func _check_moving_contact() -> Dictionary:
+	var cut := _moving_contact_receipt("dribble_touch", "contact_gap", FootballPlayer.BOOT_TOUCH_REACH)
+	var shot := _moving_contact_receipt("kick_contact", "boot_gap", FootballPlayer.STRIKE_BOOT_REACH)
+	_contact_results = {"cut": cut, "shot": shot}
+	var heading_improvement := 0.0
+	var ball_ahead := 0.0
+	var ball_separation := INF
+	var shot_launch := 0.0
+	var cut_follow := _sample_at_frame(_cut_frame + CUT_OBSERVATION_TICKS)
+	if cut.get("physical", false) and not cut_follow.is_empty():
+		var before := FootballReception.flat(_read_vector(cut["audit"]["before_velocity"]))
+		var after := FootballReception.flat(_read_vector(cut_follow["ball_velocity"]))
+		var separation := FootballReception.flat(_read_vector(cut_follow["ball"]) - _read_vector(cut_follow["player"]))
+		ball_separation = separation.length()
+		ball_ahead = separation.dot(FootballReception.flat(_read_vector(cut_follow["velocity"])).normalized())
+		if before.length() > 0.5 and after.length() > 0.5 and cut_follow["touch_serial"] == cut["audit"]["serial"]:
+			heading_improvement = rad_to_deg(before.angle_to(_cut_direction()) - after.angle_to(_cut_direction()))
+	var shot_after := _sample_at_frame(int(shot.get("frame", -10)) + 2)
+	if shot.get("physical", false) and not shot_after.is_empty():
+		shot_launch = _read_vector(shot_after["ball_velocity"]).dot(_cut_direction())
+	cut["observed_heading_improvement_deg"] = heading_improvement
+	cut["observed_ball_ahead_m"] = ball_ahead
+	cut["observed_ball_separation_m"] = ball_separation if is_finite(ball_separation) else null
+	shot["observed_forward_launch_mps"] = shot_launch
+	return {
+		"live_cut_while_jogging": cut.get("physical", false) and float(cut.get("player_speed_mps", 0.0)) > 1.4,
+		"cut_redirects_free_roll": heading_improvement >= 8.0 and ball_ahead > 0.08 and ball_separation <= 0.95,
+		"cut_support_foot_holds": cut.get("support_holds", false),
+		"live_shot_while_moving": shot.get("physical", false) and float(shot.get("player_speed_mps", 0.0)) > 0.60 and float(shot.get("incoming_speed_mps", 0.0)) > 0.5,
+		"shot_support_foot_holds": shot.get("support_holds", false),
+		"shot_leaves_boot_toward_stick": shot_launch > 5.0 and _peak_ball_y > FootballBall.RADIUS + 0.035,
+		"one_cut_and_one_shot_on_same_ball": _ball.impulse_audit.size() == 3 and int(cut.get("serial", -1)) == _seed_serial + 1 and int(shot.get("serial", -1)) == _seed_serial + 2,
+		"ball_remains_free": _free_ball,
+		"ball_and_feet_framed": _framed,
+		"finite_player_pose_and_ball": _finite,
+	}
+
+
+func _moving_contact_receipt(kind: String, gap_field: String, reach: float) -> Dictionary:
+	for event in _events:
+		if event["kind"] != kind or (kind == "dribble_touch" and not event["detail"].get("steer", false)):
+			continue
+		var detail: Dictionary = event["detail"]
+		var frame: int = event["frame"]
+		var serial := int(detail.get("touch_serial", -1))
+		var sample := _sample_at_frame(frame)
+		var receipt := {"frame": frame, "serial": serial, "event": event}
+		if sample.is_empty():
+			return receipt
+		var side := "left" if detail["foot"] == "right" else "right"
+		receipt.merge(_contact_support_receipt(frame, side, sample[side]))
+		receipt["player_speed_mps"] = _read_vector(sample["velocity"]).length()
+		for audit in _ball.impulse_audit:
+			if int(audit["serial"]) != serial or audit["player_id"] != _player.player_id:
+				continue
+			var gap := float(detail.get(gap_field, INF))
+			receipt["audit"] = audit
+			receipt["incoming_speed_mps"] = FootballReception.flat(_read_vector(audit["before_velocity"])).length()
+			receipt["physical"] = serial > _seed_serial and gap >= 0.0 and gap <= reach and _read_vector(audit["impulse"]).length() > 0.01
+			break
+		return receipt
+	return {}
+
+
+func _contact_support_receipt(frame: int, side: String, anchor: Dictionary) -> Dictionary:
+	var held_ticks := 0
+	var drift := 0.0
+	var height := 0.0
+	# Sample the actual opposite boot at impact and the uninterrupted plant into it.
+	for tick in range(frame, frame - 4, -1):
+		var sample := _sample_at_frame(tick)
+		if sample.is_empty() or not sample[side]["contact_support"]:
+			break
+		held_ticks += 1
+		for key in ["sole", "toe", "heel"]:
+			var point := _read_vector(sample[side][key])
+			drift = maxf(drift, FootballReception.flat(point - _read_vector(anchor[key])).length())
+			height = maxf(height, absf(point.y))
+	return {
+		"support_side": side, "support_ticks_at_contact": held_ticks,
+		"support_drift_m": drift, "support_abs_height_m": height,
+		"support_holds": held_ticks >= 3 and drift <= MAX_PLANT_DRIFT and height <= MAX_SOLE_HEIGHT,
+	}
+
+
+func _sample_at_frame(frame: int) -> Dictionary:
+	for sample in _samples:
+		if int(sample["frame"]) == frame:
+			return sample
+	return {}
+
+
 func _capture_event(kind: String, detail: Dictionary) -> void:
-	_events.append({"kind": kind, "phase": _phase["label"], "frame": Engine.get_physics_frames(), "detail": detail.duplicate(true)})
+	var frame := Engine.get_physics_frames()
+	_events.append({"kind": kind, "phase": _phase["label"], "frame": frame, "detail": detail.duplicate(true)})
+	if _cut_frame < 0 and _phase["label"] == "Moving cut" and kind == "dribble_touch" and detail.get("steer", false):
+		_cut_frame = frame
 
 
 func _vector(value: Vector3) -> Array[float]:
