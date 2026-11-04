@@ -147,10 +147,12 @@ func _exercise(game: Node3D, penalty: bool, record_recovery := false) -> Diction
 	game.kickoff_remaining = 0.0
 	attacker.linear_velocity = Vector3.LEFT * 6.0
 	var queued := attacker.slide(ball)
+	var slide_samples: Array[Dictionary] = []
 	for _frame in range(ceili(0.55 * hz)):
 		await physics_frame
 		if record_recovery:
 			_frame_recovery(camera, victim.global_position, attacker.global_position)
+			slide_samples.append(_sample_slide(attacker, ball, not game.restart.is_empty()))
 		if not _slide_contact.is_empty():
 			break
 	var restart_state: Dictionary = {}
@@ -172,9 +174,10 @@ func _exercise(game: Node3D, penalty: bool, record_recovery := false) -> Diction
 				break
 		if record_recovery:
 			var secondary := ball.global_position if not game.restart.is_empty() else victim.global_position
-			if restart_state.is_empty():
+			if restart_state.is_empty() or attacker.action_kind == "slide" or attacker.recovery_remaining > 0.0:
 				secondary = attacker.global_position
 			_frame_recovery(camera, victim.global_position, secondary)
+			slide_samples.append(_sample_slide(attacker, ball, not restart_state.is_empty()))
 			if not restart_state.is_empty():
 				recovery_samples.append(_sample_recovery(victim))
 				if resumed and victim.ragdoll == null:
@@ -210,13 +213,14 @@ func _exercise(game: Node3D, penalty: bool, record_recovery := false) -> Diction
 		checks["penalty_keeper_on_goal_line"] = absf(float(restart_state.get("keeper_x", 0.0)) - ElevenPitch.HALF_LENGTH) <= 0.06
 	if record_recovery:
 		checks.merge(_check_recovery(recovery_samples, events, victim.player_id, hz))
+		checks.merge(_check_slide_finish(slide_samples, events, ball.impulse_audit, attacker.player_id, seed_serial, serial, hz))
 	return {
 		"passed": not checks.values().has(false), "checks": checks,
 		"fixture": "Initial placements, referee facing and attacker run-up only. The production slide sweep, foul decision and restart own the outcome.",
 		"attacker": attacker.player_id, "victim": victim.player_id, "seed_serial": seed_serial,
 		"slide_contact": _slide_contact.duplicate(true), "restart": restart_state,
 		"match_action_log": events, "impulse_audit": ball.impulse_audit.duplicate(true),
-		"recovery_samples": recovery_samples,
+		"recovery_samples": recovery_samples, "slide_samples": slide_samples,
 	}
 
 
@@ -224,8 +228,80 @@ func _frame_recovery(camera: Camera3D, player_position: Vector3, secondary_posit
 	var separation := FootballReception.flat(secondary_position - player_position).limit_length(5.0)
 	var focus := player_position + separation * 0.42 + Vector3.UP * 0.74
 	camera.size = 4.2 + separation.length() * 0.65
-	camera.position = focus + Vector3(1.5, 3.4, 8.0)
+	camera.position = focus + Vector3(2.2, 2.8, 8.0)
 	camera.look_at(focus)
+
+
+func _sample_slide(attacker: FootballPlayer, ball: FootballBall, after_whistle: bool) -> Dictionary:
+	var torso := attacker.visual_controller.upper_body
+	var left := attacker.visual_controller.left_boot.global_position
+	var right := attacker.visual_controller.right_boot.global_position
+	return {
+		"frame": Engine.get_physics_frames(), "after_whistle": after_whistle,
+		"action": attacker.action_kind, "elapsed_s": attacker.action_elapsed, "duration_s": attacker.action_duration,
+		"recovery_s": attacker.recovery_remaining, "has_ball_target": attacker.action_ball != null,
+		"player_position": _vector(attacker.global_position),
+		"speed_mps": FootballReception.flat(attacker.linear_velocity).length(),
+		"hip_offset_m": attacker.body_visual.position.y, "torso_position": _vector(torso.global_position),
+		"torso_up_dot": torso.global_basis.y.dot(Vector3.UP),
+		"left_boot": _vector(left), "right_boot": _vector(right),
+		"nearest_boot_ball_gap_m": minf(left.distance_to(ball.global_position), right.distance_to(ball.global_position)),
+		"collider_height_m": (attacker.body_collider.shape as CapsuleShape3D).height,
+	}
+
+
+func _check_slide_finish(samples: Array[Dictionary], events: Array, audit: Array[Dictionary], attacker_id: String, seed_serial: int, restart_serial: int, hz: int) -> Dictionary:
+	var first: Dictionary = {}
+	var last: Dictionary = {}
+	var previous: Dictionary = {}
+	var continuous := true
+	var recovered := false
+	var rise_seen := false
+	var low_pose := false
+	var all_disarmed := true
+	var peak_hip_step := 0.0
+	for sample in samples:
+		if not sample["after_whistle"]:
+			previous = sample
+			continue
+		if first.is_empty():
+			first = sample
+		if not previous.is_empty():
+			peak_hip_step = maxf(peak_hip_step, absf(float(sample["hip_offset_m"]) - float(previous["hip_offset_m"])))
+		if sample["action"] == "slide" and not rise_seen:
+			continuous = continuous and (last.is_empty() or float(sample["elapsed_s"]) > float(last["elapsed_s"]))
+			last = sample
+			all_disarmed = all_disarmed and not sample["has_ball_target"]
+			low_pose = low_pose or (float(sample["hip_offset_m"]) < -0.30 and float(sample["torso_up_dot"]) < 0.88)
+		elif not last.is_empty() and sample["action"] == "":
+			rise_seen = rise_seen or float(sample["recovery_s"]) >= 0.40
+			recovered = recovered or (rise_seen and float(sample["recovery_s"]) <= 0.01 and float(sample["hip_offset_m"]) > -0.23 and float(sample["torso_up_dot"]) > 0.92 and float(sample["collider_height_m"]) > 1.5)
+		previous = sample
+	var carried_through := false
+	var braked := false
+	if not first.is_empty() and not last.is_empty() and first["action"] == "slide":
+		var initial_remaining := float(first["duration_s"]) - float(first["elapsed_s"])
+		var final_remaining := float(last["duration_s"]) - float(last["elapsed_s"])
+		var travel := FootballReception.flat(_read_vector(last["player_position"]) - _read_vector(first["player_position"])).length()
+		carried_through = continuous and float(first["elapsed_s"]) >= 0.08 and float(first["collider_height_m"]) < 0.95 and initial_remaining >= 0.10 and initial_remaining <= 0.19 and final_remaining <= 2.0 / hz
+		braked = travel > 0.08 and float(last["speed_mps"]) < float(first["speed_mps"]) * 0.80
+	var after_foul := false
+	var no_tackle_hit := true
+	for event in events:
+		if event.get("player", "") != attacker_id:
+			continue
+		if event["kind"] == "foul":
+			after_foul = true
+		elif after_foul and event["kind"] == "slide_body_contact":
+			no_tackle_hit = false
+	for impulse in audit:
+		if impulse["player_id"] == attacker_id and int(impulse["serial"]) > seed_serial and int(impulse["serial"]) <= restart_serial:
+			no_tackle_hit = false
+	return {
+		"tackler_finishes_same_shortened_slide_after_whistle": carried_through and low_pose and braked,
+		"tackler_gets_up_without_pose_snap": recovered and peak_hip_step < 0.15,
+		"slide_disarmed_after_whistle": carried_through and all_disarmed and after_foul and no_tackle_hit,
+	}
 
 
 func _sample_recovery(victim: FootballPlayer) -> Dictionary:

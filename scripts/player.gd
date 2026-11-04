@@ -12,6 +12,7 @@ signal physical_event(kind: String, detail: Dictionary)
 const CONTROL_REACH := 0.95
 const FOOT_DISTANCE := 0.61
 const TOUCH_STRIDE_TIME := 0.13
+const WHISTLE_SLIDE_SETTLE_SECONDS := 0.18
 const BOOT_TOUCH_REACH := FootballBall.RADIUS + 0.12
 const SOLE_STOP_DELAY := 0.15
 const SOLE_GAP_TOLERANCE := 0.018
@@ -286,7 +287,9 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# immediately stops requiring those adjustments, for humans and AI alike.
 	var desired := _running_target_velocity(control_stride_remaining)
 	if action_kind == "slide":
-		desired = action_direction * lerpf(7.0, 2.5, clampf(action_elapsed / action_duration, 0, 1))
+		desired = Vector3.ZERO
+		if is_instance_valid(action_ball):
+			desired = action_direction * lerpf(7.0, 2.5, clampf(action_elapsed / action_duration, 0, 1))
 	elif action_kind == "kick":
 		var recovery := 0.0
 		if kick_impact_time >= 0.0:
@@ -1134,7 +1137,7 @@ func _update_challenge(delta: float) -> void:
 				action_has_hit = true
 				challenge_contacts += 1
 				match_touches += 1
-	if action_kind == "slide" and action_elapsed >= 0.08 and action_elapsed <= 0.50:
+	if action_kind == "slide" and is_instance_valid(action_ball) and action_elapsed >= 0.08 and action_elapsed <= 0.50:
 		_slide_player_contacts(boot_world)
 	last_boot_world = boot_world
 	if is_instance_valid(action_ball):
@@ -1223,14 +1226,15 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		apply_central_impulse(-impulse)
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest, "contact": contact, "ball_first": action_has_hit})
 
-func reset_action(keep_fall: bool = false) -> void:
+func reset_action(keep_ground_recovery: bool = false) -> void:
+	var finishing_slide := keep_ground_recovery and action_kind == "slide"
 	called_run_remaining = 0.0
 	throw_in_phase = -1.0
 	throw_in_recovery = 0.0
 	sole_stop_active = false
 	receive_exit_direction = Vector3.ZERO
 	kick_style = ""
-	if ragdoll != null and not keep_fall:
+	if ragdoll != null and not keep_ground_recovery:
 		ragdoll.finish(true)
 	if ragdoll == null:
 		getting_up = false
@@ -1240,13 +1244,11 @@ func reset_action(keep_fall: bool = false) -> void:
 	hop_elapsed = 0
 	hop_cooldown = 0
 	slide_victims.clear()
-	# Restarts reset action state as well as transforms, including a lowered slide.
-	action_kind = ""
-	action_elapsed = 0
+	# A slide can settle after the whistle. Its contact window ends immediately.
+	action_ball = null
 	shot_setup_ball = null
 	kick_impact_time = -1.0
 	tackle_remaining = 0
-	tackle_cooldown = 0
 	stagger_remaining = 0
 	close_control_remaining = 0
 	control_stride_remaining = 0
@@ -1278,5 +1280,11 @@ func reset_action(keep_fall: bool = false) -> void:
 	chase_contact_gap = 0
 	stop_stride_remaining = 0
 	previous_intent_magnitude = 0
-	body_collider.shape.height = 1.65
-	body_collider.position.y = 0.86
+	if finishing_slide:
+		action_duration = minf(action_duration, action_elapsed + WHISTLE_SLIDE_SETTLE_SECONDS)
+	else:
+		action_kind = ""
+		action_elapsed = 0
+		tackle_cooldown = 0
+		body_collider.shape.height = 1.65
+		body_collider.position.y = 0.86

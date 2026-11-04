@@ -356,9 +356,9 @@ func drop_ball(reason: String = "dead_ball") -> void:
 	# and current velocity when play ends or a restart is prepared.
 	_drop_grip(reason)
 
-func reset_action(keep_fall: bool = false) -> void:
+func reset_action(keep_ground_recovery: bool = false) -> void:
 	_drop_grip("restart")
-	super.reset_action(keep_fall)
+	super.reset_action(keep_ground_recovery)
 	hand_cooldown = 0
 	lunge_remaining = 0
 	keeper_reaction_remaining = 0
