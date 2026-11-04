@@ -420,6 +420,7 @@ func _outfield_count() -> int:
 
 func reset_positions(kickoff_team: int) -> void:
 	_set_throw_hold_player(null)
+	ball.restart_striker_id = ""
 	_clear_offside()
 	pending_foul.clear()
 	indirect_taker = null
@@ -934,7 +935,7 @@ func _on_strike_contact(kind: String, player: FootballPlayer) -> void:
 		kickoff_taker = null
 		kickoff_receiver = null
 	if not restart.is_empty() and bool(restart.get("strike_requested", false)) and restart.taker == player and kind == str(restart.get("strike_kind", "")):
-		_record("restart_taken", player, {"restart": restart.kind, "touch_serial": ball.touch_serial})
+		_record("restart_taken", player, {"restart": restart.kind, "touch_serial": ball.touch_serial, "retakes": restart.strike_retakes, "plan_attempts": restart.strike_plan_attempts})
 		if restart.kind != "indirect_free_kick":
 			referee.resume_play()
 		restart.clear()
@@ -1189,6 +1190,7 @@ func throw_entering_pitch() -> bool:
 
 func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "", retrieve_ball: bool = false) -> void:
 	_set_throw_hold_player(null)
+	ball.restart_striker_id = ""
 	_clear_offside()
 	pending_foul.clear()
 	indirect_taker = null
@@ -1299,11 +1301,55 @@ func _place_restart_player(player: FootballPlayer, spot: Vector3) -> void:
 func _request_restart_strike(direction: Vector3, kind: String, speed: float, lift: float, receiver: FootballPlayer = null) -> void:
 	restart.strike_requested = true
 	restart.strike_timeout = 2.5
+	restart.strike_queued = false
+	restart.strike_retakes = 0
+	restart.strike_plan_attempts = 0
+	restart.strike_stance = ball.global_position - direction * 0.55
 	restart.strike_direction = direction
 	restart.strike_kind = kind
 	restart.strike_receiver_id = receiver.player_id if receiver != null else ""
 	restart.strike_speed = speed
 	restart.strike_lift = lift
+
+func _retry_restart_strike(kicker: FootballPlayer, reason: String, approach: Vector3) -> void:
+	var speed := FootballReception.flat(kicker.linear_velocity).length()
+	var old_stance: Vector3 = restart.strike_stance
+	var nearest_to_stance := INF
+	for other in players:
+		if other != kicker:
+			nearest_to_stance = minf(nearest_to_stance, FootballReception.flat(old_stance - other.global_position).length())
+	_record("restart_strike_retry", kicker, {
+		"restart": restart.kind, "reason": reason, "stance_gap_m": approach.length(),
+		"speed_mps": speed, "plan_attempts": restart.strike_plan_attempts, "nearest_player_gap_m": nearest_to_stance,
+		"boot_gap_m": kicker.last_kick_boot_gap if bool(restart.strike_queued) else null,
+	})
+	ball.restart_striker_id = ""
+	ball.freeze = true
+	restart.strike_retakes += 1
+	restart.strike_timeout = 1.25
+	restart.strike_queued = false
+	kicker.reset_action()
+	kicker.kick_cooldown = 0.0
+	kicker.intent = Vector3.ZERO
+	var direction: Vector3 = restart.strike_direction
+	var lateral := direction.cross(Vector3.UP)
+	var close := ball.global_position - direction * (0.49 if int(restart.strike_retakes) % 2 == 1 else 0.43)
+	var stance := close
+	var best := -INF
+	for side in [0.0, -0.27, 0.27]:
+		var candidate := close + lateral * float(side)
+		var clearance := 2.0
+		for other in players:
+			if other != kicker:
+				clearance = minf(clearance, FootballReception.flat(candidate - other.global_position).length())
+		var score := minf(clearance, 0.86) - absf(float(side)) * 0.08
+		if score > best:
+			best = score
+			stance = candidate
+	restart.strike_stance = stance
+	_place_restart_player(kicker, Vector3(stance.x, 0.06, stance.z))
+	kicker.aim = direction
+	kicker.body_visual.rotation.y = atan2(-direction.x, -direction.z)
 
 func _tick_restart(delta: float) -> void:
 	if restart.has("attendant") and _tick_attendant_retrieval(delta):
@@ -1338,28 +1384,30 @@ func _tick_restart(delta: float) -> void:
 		ball.global_position = thrower.visual_controller.throw_in_hand_center(thrower)
 	if bool(restart.get("strike_requested", false)):
 		var kicker: FootballPlayer = restart.taker
-		restart.strike_timeout -= delta
 		if kicker.action_kind == "kick":
 			return
+		var stance: Vector3 = restart.strike_stance
+		var approach := FootballReception.flat(stance - kicker.global_position)
+		if bool(restart.strike_queued):
+			_retry_restart_strike(kicker, "contact_missed", approach)
+			return
+		restart.strike_timeout -= delta
 		if float(restart.strike_timeout) <= 0.0:
-			kicker.intent = Vector3.ZERO
-			ball.freeze = false
-			ball.sleeping = false
-			_record("restart_strike_timeout", kicker, {"restart": restart.kind})
-			restart.clear()
-			referee.resume_play()
+			var reason := "stance_blocked" if approach.length_squared() > 0.16 * 0.16 else "plan_rejected"
+			if reason == "plan_rejected" and FootballReception.flat(kicker.linear_velocity).length_squared() > 0.75 * 0.75:
+				reason = "still_moving"
+			_retry_restart_strike(kicker, reason, approach)
 			return
 		var aim_direction: Vector3 = restart.strike_direction
-		var stance := ball.global_position - aim_direction * 0.55
-		var approach := FootballReception.flat(stance - kicker.global_position)
 		kicker.aim = aim_direction
 		kicker.intent = approach.limit_length(0.35) if approach.length_squared() > 0.16 * 0.16 else Vector3.ZERO
 		if kicker.intent != Vector3.ZERO or FootballReception.flat(kicker.linear_velocity).length_squared() > 0.75 * 0.75:
 			return
+		restart.strike_plan_attempts += 1
 		if kicker.kick(ball, aim_direction, float(restart.strike_speed), float(restart.strike_lift), str(restart.strike_kind)):
 			kicker.pending_receiver_id = str(restart.strike_receiver_id)
-			ball.freeze = false
-			ball.sleeping = false
+			restart.strike_queued = true
+			ball.restart_striker_id = kicker.player_id
 		return
 	restart.remaining -= delta
 	var taker: FootballPlayer = restart.taker

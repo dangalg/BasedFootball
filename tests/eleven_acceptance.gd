@@ -7,6 +7,8 @@ extends SceneTree
 const SCENE_PATH := "res://scenes/eleven_match.tscn"
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
 const MATCH_SECONDS := 180.0
+const CLOCK_STALL_SECONDS := 15.0
+const ABSOLUTE_PADDING_SECONDS := 90.0
 const RESTARTS := ["kickoff", "throw_in", "corner", "goal_kick", "indirect_free_kick", "direct_free_kick", "penalty"]
 const DELIVERIES := ["pass", "through", "lob"]
 const SEED := 81100
@@ -72,6 +74,12 @@ var _driver: ControllerDriver
 var _report_path := ""
 var _frames := 0
 var _max_frames := 0
+var _stall_frame_limit := 0
+var _lowest_remaining := INF
+var _clock_stall_frames := 0
+var _longest_clock_stall_frames := 0
+var _dead_frames := 0
+var _watchdog_reason := ""
 var _sample_interval := 0
 var _started_at := 0
 var _match_seconds := MATCH_SECONDS
@@ -165,7 +173,8 @@ func _start() -> void:
 	_game.decision_driver = _driver
 	_game.set_process_unhandled_input(false)
 	_sample_interval = maxi(1, Engine.physics_ticks_per_second / 2)
-	_max_frames = roundi((_match_seconds + 60.0) * Engine.physics_ticks_per_second)
+	_max_frames = ceili((_match_seconds * 2.0 + ABSOLUTE_PADDING_SECONDS) * Engine.physics_ticks_per_second)
+	_stall_frame_limit = ceili(CLOCK_STALL_SECONDS * Engine.physics_ticks_per_second)
 	_started_at = Time.get_ticks_msec()
 	physics_frame.connect(_observe)
 	print("ELEVEN_ACCEPTANCE_STARTED seed=%d roster=%s" % [SEED, JSON.stringify(_roster)])
@@ -238,7 +247,8 @@ func _observe() -> void:
 	_observe_restarts()
 	if _throw_entry_check:
 		_observe_throw_entry()
-	if _game.phase == "finished" or _frames >= _max_frames:
+	_observe_clock()
+	if _game.phase == "finished" or not _watchdog_reason.is_empty():
 		_finish()
 		return
 	if _frames % _sample_interval != 0 or _game.phase != "playing" or _game.kickoff_remaining > 0.0 or is_instance_valid(_game.kickoff_taker) or not _game.restart.is_empty():
@@ -269,6 +279,25 @@ func _observe() -> void:
 			_crowd_samples[team] += 1
 	for keeper: FootballPlayer in _game.keepers:
 		_finite = _finite and keeper.global_position.is_finite() and keeper.linear_velocity.is_finite()
+
+
+func _observe_clock() -> void:
+	var remaining: float = _game.remaining
+	if remaining < _lowest_remaining:
+		_lowest_remaining = remaining
+		_clock_stall_frames = 0
+	else:
+		_clock_stall_frames += 1
+		_dead_frames += 1
+		_longest_clock_stall_frames = maxi(_longest_clock_stall_frames, _clock_stall_frames)
+	# Only the match can declare full time. Let celebrations and restarts finish
+	# within the same stall budget, including when little time is left to play.
+	if _game.phase == "finished":
+		return
+	if _clock_stall_frames >= _stall_frame_limit:
+		_watchdog_reason = "clock_stalled"
+	elif _frames >= _max_frames:
+		_watchdog_reason = "absolute_guard"
 
 
 func _observe_throw_entry() -> void:
@@ -424,9 +453,15 @@ func _finish() -> void:
 		checks["home_442_applied_at_kickoff"] = _formation_opening["home_formation_selected"] and _formation_opening["home_442"]
 		checks["away_433_preserved_at_kickoff"] = _formation_opening["away_433"]
 	var passed := not checks.values().has(false)
+	var hz := float(Engine.physics_ticks_per_second)
 	var report := {
 		"status": "passed" if passed else "failed", "seed": SEED, "roster": _roster, "checks": checks,
 		"score": _game.scores, "match_time_s": latest_time, "physics_frames": _frames,
+		"dead_time_s": float(_dead_frames) / hz,
+		"longest_clock_stop_s": float(_longest_clock_stall_frames) / hz,
+		"clock_stop_at_exit_s": float(_clock_stall_frames) / hz,
+		"watchdog_reason": _watchdog_reason, "phase_at_exit": _game.phase,
+		"restart_at_exit": _game.restart.get("kind", ""),
 		"menu_settings": _menu_settings,
 		"formation_opening": _formation_opening,
 		"halftime": _halftime,

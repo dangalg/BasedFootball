@@ -1032,6 +1032,9 @@ func _update_challenge() -> void:
 					var incoming := action_ball.linear_velocity
 					# Preserve part of incoming motion instead of replacing the trajectory.
 					var impulse := ((target - incoming * 0.85) * action_ball.mass).limit_length(MAX_KICK_IMPULSE)
+					if action_ball.restart_striker_id == player_id:
+						action_ball.restart_striker_id = ""
+						action_ball.freeze = false
 					action_ball.touch(team, player_id, impulse, Vector3(0, -FootballBall.RADIUS * 0.35, 0))
 					var curve_sign := 0.0
 					if kick_style == "finesse":

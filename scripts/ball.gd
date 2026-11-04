@@ -20,6 +20,7 @@ var impulse_audit: Array[Dictionary] = []
 var passer_block_id: String = ""
 var passer_block_remaining: float = 0.0
 var grip_holder_id: String = ""
+var restart_striker_id: String = ""
 var pass_active: bool = false
 var pass_passer_id: String = ""
 var pass_receiver_id: String = ""
