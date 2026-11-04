@@ -4,6 +4,7 @@ extends RigidBody3D
 signal played(team: int, player_id: String, touch_kind: String)
 
 const RADIUS := 0.11
+const AIR_DAMPING := 0.32
 const FINESSE_DURATION := 1.4
 const FINESSE_SPIN := 36.0
 const FINESSE_MAX_SPIN_CHANGE := 50.0
@@ -142,14 +143,44 @@ func clear_pass(reason: String) -> void:
 	pass_passer_id = ""
 	pass_team = -1
 
+static func spin_force(spin: Vector3, velocity: Vector3) -> Vector3:
+	return (spin.cross(velocity) * 0.0007).limit_length(0.25)
+
+func _flight_gravity() -> float:
+	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * gravity_scale
+	return maxf(0.1, gravity - spin_force(angular_velocity, linear_velocity).y / mass)
+
+func airborne_position_after(seconds: float) -> Vector3:
+	var travel := (1.0 - exp(-AIR_DAMPING * seconds)) / AIR_DAMPING
+	var drop := _flight_gravity() * (seconds - travel) / AIR_DAMPING
+	return global_position + linear_velocity * travel - Vector3.UP * drop
+
+func time_to_descend_to(height: float) -> float:
+	var offset := global_position.y - height
+	var rise := linear_velocity.y
+	var gravity := _flight_gravity()
+	var drop := rise * rise + 2.0 * gravity * offset
+	if drop <= 0.0 or (offset <= 0.0 and rise <= 0.0):
+		return 0.0
+	# Refine the ballistic time using the air-damped flight.
+	var seconds := (rise + sqrt(drop)) / gravity
+	var terminal_speed := gravity / AIR_DAMPING
+	for _step in range(2):
+		var decay := exp(-AIR_DAMPING * seconds)
+		var error := offset + (rise + terminal_speed) * (1.0 - decay) / AIR_DAMPING - terminal_speed * seconds
+		var descent_speed := terminal_speed - (rise + terminal_speed) * decay
+		if descent_speed <= 0.25:
+			break
+		seconds = maxf(0.0, seconds + error / descent_speed)
+	return seconds
+
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	var horizontal := Vector3(state.linear_velocity.x, 0.0, state.linear_velocity.z)
 	# Rolling resistance acts on every team equally; no possession attachment.
 	if state.transform.origin.y < RADIUS + 0.045:
 		state.apply_central_force(-horizontal * 0.13)
 	# Explicit aerodynamic spin force, bounded for numerical stability.
-	var magnus := state.angular_velocity.cross(state.linear_velocity) * 0.0007
-	state.apply_central_force(magnus.limit_length(0.25))
+	state.apply_central_force(spin_force(state.angular_velocity, state.linear_velocity))
 	if _finesse_remaining <= 0.0:
 		return
 	if not grip_holder_id.is_empty() or horizontal.length_squared() < 1.0 or horizontal.dot(_finesse_heading) <= 0.0:

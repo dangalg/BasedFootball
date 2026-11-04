@@ -13,8 +13,13 @@ var last_receiver: String = ""
 func queue_delivery(player: FootballPlayer, kind: String, ball: FootballBall, receiver_id: String = "") -> void:
 	if kind not in ["pass", "through", "lob", "roll", "throw"]:
 		return
-	pending.append({"passer":player,"kind":kind,"serial":ball.touch_serial,"receiver":receiver_id if not receiver_id.is_empty() else player.pending_receiver_id})
+	pending.append({
+		"passer": player, "kind": kind, "serial": ball.touch_serial,
+		"receiver": receiver_id if not receiver_id.is_empty() else player.pending_receiver_id,
+		"target_depth": player.pending_receiver_depth,
+	})
 	player.pending_receiver_id = ""
+	player.pending_receiver_depth = 0.0
 
 func reset(ball: FootballBall) -> void:
 	pending.clear()
@@ -34,7 +39,7 @@ func update(game: Node3D, delta: float) -> void:
 			var velocity := flat(ball.linear_velocity)
 			if velocity.length() < 1.0:
 				continue
-			var receiver := choose_receiver(passer, game.players, ball.global_position, velocity, str(delivery.receiver))
+			var receiver := choose_receiver(passer, game.players, ball.global_position, velocity, str(delivery.receiver), float(delivery.target_depth))
 			if receiver == null:
 				continue
 			var distance := flat(receiver.global_position-ball.global_position).length()
@@ -70,7 +75,7 @@ func update(game: Node3D, delta: float) -> void:
 	ball.pass_target = interception_point(receiver, ball)
 	flight_velocity = velocity
 
-static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlayer], origin: Vector3, velocity: Vector3, requested: String = "") -> FootballPlayer:
+static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlayer], origin: Vector3, velocity: Vector3, requested: String = "", target_depth: float = 0.0) -> FootballPlayer:
 	var result: FootballPlayer = null
 	var best := -INF
 	var direction := flat(velocity).normalized()
@@ -85,7 +90,8 @@ static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlaye
 		var lateral := (offset-direction*along).length()
 		if along < .3 or lateral > maxf(2.0,along*.55):
 			continue
-		var score := 8.0-lateral-distance*.12+(3.0 if player.player_id==requested else 0.0)
+		var depth_cost := absf(along - target_depth) * 0.22 if target_depth > 0.0 else distance * 0.12
+		var score := 8.0 - lateral - depth_cost + (3.0 if player.player_id == requested else 0.0)
 		if score > best:
 			best = score
 			result = player
@@ -94,34 +100,31 @@ static func choose_receiver(passer: FootballPlayer, players: Array[FootballPlaye
 static func interception_point(receiver: FootballPlayer, ball: FootballBall) -> Vector3:
 	var velocity := flat(ball.linear_velocity)
 	var origin := ball.global_position
-	var airborne := receiver.eleven_slot >= 0 and (origin.y > 0.45 or ball.linear_velocity.y > 1.0)
-	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
-	var earliest := 0.15
-	var damping := 0.52
-	if airborne:
-		# Run to the first playable part of the flight instead of the shadow.
-		var rise := ball.linear_velocity.y
-		var drop := maxf(0.0, rise * rise + 2.0 * gravity * (origin.y - 0.45))
-		earliest = maxf(earliest, (rise + sqrt(drop)) / gravity)
-		damping = 0.32
-	var fallback_distance := (1.0 - exp(-damping * earliest)) / damping if airborne else earliest
-	var target := origin + velocity * fallback_distance
-	var best := INF
-	for sample in range(1,19):
-		var time := float(sample)*.075
-		if airborne and time < earliest:
-			continue
-		# Refresh on every decision so a bounce changes the projected target.
-		var point := origin + velocity * ((1.0 - exp(-damping * time)) / damping)
-		var needed := flat(point-receiver.global_position).length()
-		var reach := receiver.pace*time*.82+.55
-		var cost := absf(needed-reach)+time*.12
-		if needed <= reach and cost < best:
-			best = cost
-			target = point
+	var target := origin + velocity * 0.15
+	if receiver.eleven_slot >= 0 and is_airborne_delivery(ball):
+		var drop := ball.airborne_position_after(ball.time_to_descend_to(0.45))
+		var heading := velocity.normalized()
+		var lateral := heading.cross(Vector3.UP)
+		var side := -1.0 if (receiver.global_position - drop).dot(lateral) < -0.03 else 1.0
+		# Leave room between the flight line and the player's capsule.
+		target = drop + heading * 0.35 + lateral * side * 0.60
+	else:
+		var best := INF
+		for sample in range(1, 19):
+			var time := float(sample) * 0.075
+			var point := origin + velocity * ((1.0 - exp(-0.52 * time)) / 0.52)
+			var needed := flat(point - receiver.global_position).length()
+			var reach := receiver.pace * time * 0.82 + 0.55
+			var cost := absf(needed - reach) + time * 0.12
+			if needed <= reach and cost < best:
+				best = cost
+				target = point
 	var x := 49.7 if receiver.eleven_slot >= 0 else 17.7
 	var z := 31.7 if receiver.eleven_slot >= 0 else 11.5
 	return Vector3(clampf(target.x, -x, x), 0, clampf(target.z, -z, z))
+
+static func is_airborne_delivery(ball: FootballBall) -> bool:
+	return ball.global_position.y > 0.45 or absf(ball.linear_velocity.y) > 1.0
 
 static func flat(value: Vector3) -> Vector3:
 	return Vector3(value.x,0,value.z)

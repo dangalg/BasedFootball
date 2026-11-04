@@ -31,7 +31,8 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		player.aim = (ball.global_position-player.global_position)*Vector3(1,0,1)
 		player.aim = player.aim.normalized()
 		var desired := offset.normalized()*minf(offset.length()*2.2,player.pace)
-		if gap < 1.6:
+		var meeting_ball := gap < 1.6 and (not eleven or ball.global_position.y <= FootballPlayer.RECEIVE_MAX_HEIGHT)
+		if meeting_ball and not (eleven and FootballReception.is_airborne_delivery(ball)):
 			# Meet the lane, then move with the delivery rather than charging
 			# head-on through it or turning to attack before the first touch.
 			desired = (incoming*.35+offset*2.0).limit_length(player.pace*.65)
@@ -42,7 +43,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			# The receiving step meets the ball. Pick its exit separately, and
 			# reconsider immediately after the boot touches it.
 			player.reaction_timer = 0.0
-			if gap < 1.6:
+			if meeting_ball:
 				var exit := _eleven_carry_direction(ball.global_position, players, player.team, player.attack_sign())
 				var exit_space := _space_at(ball.global_position + exit * 2.0, players, player.team, 0.25)
 				player.receive_exit_direction = exit if exit_space > 1.5 else Vector3.ZERO

@@ -3,7 +3,9 @@ extends Node3D
 signal match_finished
 
 const DURATION := 180.0
-const SHOT_BUFFER_SECONDS := 0.18
+const STRIKE_BUFFER_SECONDS := 0.18
+const DELIVERY_TAP_SECONDS := 0.055
+const DELIVERY_FULL_SECONDS := 0.60
 const PASS_CALL_SECONDS := 1.8
 const TEAM_PRESS_RANGE := 12.0
 const HALFTIME_SECONDS := 3.0
@@ -89,6 +91,11 @@ var shot_buffer_remaining := 0.0
 var shot_buffer_direction := Vector3.ZERO
 var shot_buffer_charge := 0.0
 var shot_style := "normal"
+var delivery_kind := ""
+var delivery_hold := 0.0
+var delivery_direction := Vector3.ZERO
+var delivery_buffer_remaining := 0.0
+var delivery_touch_serial := 0
 var right_stick_latched: bool = false
 var camera_focus := Vector3.ZERO
 var camera_offset := Vector3(0.0, 34.0, 29.0)
@@ -420,6 +427,7 @@ func _outfield_count() -> int:
 	return ELEVEN_ANCHORS.size() if eleven_a_side else 3
 
 func reset_positions(kickoff_team: int) -> void:
+	_clear_delivery_charge()
 	_set_throw_hold_player(null)
 	_containment.clear()
 	ball.restart_striker_id = ""
@@ -520,10 +528,11 @@ func _tick_away_kickoff(delta: float) -> void:
 
 func _select(index: int) -> void:
 	shot_buffer_remaining = 0.0
+	_clear_delivery_charge()
 	pass_call_remaining = 0.0
 	if controlled != null:
 		controlled.jockey = false
-		controlled.shot_setup_ball = null
+		controlled.strike_setup_ball = null
 	selected_index = clampi(index, 0, home_outfield.size()-1)
 	controlled = home_outfield[selected_index]
 	for player in players:
@@ -573,6 +582,7 @@ func _set_ends_swapped(swapped: bool) -> void:
 
 func _begin_halftime() -> void:
 	phase = "halftime"
+	_clear_delivery_charge()
 	halftime_remaining = HALFTIME_SECONDS
 	_set_pressure_teammate(null)
 	charging = false
@@ -598,7 +608,7 @@ func _tick_halftime(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	if controlled != null:
-		controlled.shot_setup_ball = null
+		controlled.strike_setup_ball = null
 	if phase == "halftime":
 		_tick_halftime(delta)
 		return
@@ -657,13 +667,15 @@ func _physics_process(delta: float) -> void:
 		"square": Input.is_action_just_pressed("lob"), "hop": Input.is_action_just_pressed("hop")
 	}
 	if eleven_a_side and decision_driver == null:
+		controller_actions["pass_release"] = Input.is_action_just_released("pass")
+		controller_actions["square_release"] = Input.is_action_just_released("lob")
 		controller_actions["finesse_modifier"] = Input.is_action_pressed("finesse_modifier")
 		controller_actions["chip_modifier"] = Input.is_action_pressed("chip_modifier")
 		controller_actions["send_run"] = Input.is_action_just_pressed("send_run")
 		controller_actions["teammate_press"] = Input.is_action_pressed("teammate_press")
 	if decision_driver != null:
 		controller_actions = decision_driver.actions
-	_controller_actions(delta, controller_actions)
+	_controller_actions(delta, controller_actions, eleven_a_side and decision_driver == null)
 	if decision_driver == null and Input.is_action_just_pressed("tackle"):
 		if controlled.tackle(ball):
 			_record("tackle", controlled, {"source": "controller"})
@@ -749,10 +761,10 @@ func _strike_direction() -> Vector3:
 	var stick := Vector3(controlled.intent.x, 0, controlled.intent.z)
 	return stick.normalized() if stick.length_squared() > 0.0025 else controlled.aim.normalized()
 
-func _intended_receiver(direction: Vector3, preferred: String = "") -> FootballPlayer:
+func _intended_receiver(direction: Vector3, preferred: String, target_depth: float) -> FootballPlayer:
 	# The stick still chooses the kick direction. This chooses who should read
 	# that delivery, without bending the ball towards an unavailable teammate.
-	return FootballReception.choose_receiver(controlled, players, ball.global_position, direction, preferred)
+	return FootballReception.choose_receiver(controlled, players, ball.global_position, direction, preferred, target_depth)
 
 func _send_teammate_run() -> void:
 	if ball.last_touch_team != controlled.team or not _can_modify_shot():
@@ -769,12 +781,11 @@ func _send_teammate_run() -> void:
 	_record("run_called", runner, {"target": _vec(runner.called_run_target)})
 	hud.flash(runner.player_name.to_upper() + " MAKES A RUN", 1.3)
 
-func _request_delivery(kind: String, strength: float, lift: float) -> void:
-	var direction := _strike_direction()
+func _request_delivery(kind: String, strength: float, lift: float, direction: Vector3, target_depth: float = 0.0) -> bool:
 	var preferred := ""
 	if kind == "through" and is_instance_valid(called_runner) and called_runner.called_run_remaining > 0.0 and ball.last_touch_team == controlled.team:
 		preferred = called_runner.player_id
-	var receiver := _intended_receiver(direction, preferred)
+	var receiver := _intended_receiver(direction, preferred, target_depth)
 	if eleven_a_side and kind == "through" and receiver != null:
 		var offset := FootballReception.flat(receiver.global_position - ball.global_position)
 		var velocity := FootballReception.flat(receiver.linear_velocity)
@@ -786,10 +797,13 @@ func _request_delivery(kind: String, strength: float, lift: float) -> void:
 				strength = maxf(strength, FootballReception.through_speed(offset.length(), speed_ahead))
 	# A kick may miss. Reading an intended receiver never rotates the strike
 	# towards that player or creates a successful contact.
-	if controlled.kick(ball, direction, strength, lift, kind):
-		controlled.pending_receiver_id = receiver.player_id if receiver != null else ""
-		if not preferred.is_empty() and controlled.pending_receiver_id == preferred:
-			_record("run_through_requested", controlled, {"receiver": preferred})
+	if not controlled.kick(ball, direction, strength, lift, kind):
+		return false
+	controlled.pending_receiver_id = receiver.player_id if receiver != null else ""
+	controlled.pending_receiver_depth = target_depth
+	if not preferred.is_empty() and controlled.pending_receiver_id == preferred:
+		_record("run_through_requested", controlled, {"receiver": preferred})
+	return true
 
 func _available_presser(player: FootballPlayer) -> bool:
 	return player != controlled and player.ragdoll == null and not player.hop_active and player.recovery_remaining <= 0.0 and player.energy > 0.15 and FootballReception.flat(player.global_position - ball.global_position).length_squared() < TEAM_PRESS_RANGE * TEAM_PRESS_RANGE
@@ -831,7 +845,63 @@ func _update_team_pressure(held: bool) -> void:
 			closest = teammate
 	_set_pressure_teammate(closest)
 
-func _controller_actions(delta: float, pressed: Dictionary) -> void:
+func _call_for_pass_if_off_ball(can_strike: bool) -> bool:
+	if not eleven_a_side or can_strike or ball.last_touch_team != controlled.team or not ball.grip_holder_id.is_empty() or controlled.chasing_ball(ball):
+		return false
+	pass_call_remaining = PASS_CALL_SECONDS
+	_record("pass_called", controlled)
+	hud.flash("PASS REQUESTED", 0.85)
+	return true
+
+func _clear_delivery_charge() -> void:
+	delivery_kind = ""
+	delivery_hold = 0.0
+	delivery_buffer_remaining = 0.0
+
+func _delivery_power() -> float:
+	return clampf(inverse_lerp(DELIVERY_TAP_SECONDS, DELIVERY_FULL_SECONDS, delivery_hold), 0.0, 1.0)
+
+func _tick_powered_delivery(delta: float, pressed: Dictionary) -> void:
+	var square := bool(pressed.get("square", false))
+	if square or pressed.get("pass", false):
+		_clear_delivery_charge()
+		var receiving := ball.pass_active and ball.pass_receiver_id == controlled.player_id and controlled.reach_ball(ball, 1.65)
+		var can_strike := ball.grip_holder_id.is_empty() and (_attacking_contact() or controlled.chasing_ball(ball) or receiving)
+		if square and not can_strike:
+			controlled.slide(ball)
+			return
+		if not square and _call_for_pass_if_off_ball(can_strike):
+			return
+		if not can_strike:
+			return
+		delivery_kind = "lob" if square else "pass"
+		delivery_touch_serial = ball.touch_serial
+	if delivery_kind.is_empty():
+		return
+	if ball.freeze or not ball.grip_holder_id.is_empty() or (ball.touch_serial != delivery_touch_serial and ball.last_touch_team != controlled.team):
+		_clear_delivery_charge()
+		return
+	var lob := delivery_kind == "lob"
+	if delivery_buffer_remaining == 0.0:
+		delivery_hold = minf(DELIVERY_FULL_SECONDS, delivery_hold + delta)
+		if not pressed.get("square_release" if lob else "pass_release", false):
+			return
+		delivery_direction = _strike_direction()
+		delivery_buffer_remaining = STRIKE_BUFFER_SECONDS
+		_record("delivery_requested", controlled, {"delivery": delivery_kind, "power": _delivery_power(), "direction": _vec(delivery_direction)})
+	var power := _delivery_power()
+	var strength := lerpf(12.5, 19.0, power) if lob else lerpf(10.5, 17.0, power)
+	var lift := lerpf(5.2, 7.5, power) if lob else 0.12
+	var target_depth := lerpf(10.0, 20.0, power) if lob else lerpf(7.0, 22.0, power)
+	if _request_delivery(delivery_kind, strength, lift, delivery_direction, target_depth if power > 0.0 else 0.0):
+		_clear_delivery_charge()
+		return
+	delivery_buffer_remaining = maxf(0.0, delivery_buffer_remaining - delta)
+	if delivery_buffer_remaining == 0.0:
+		_record("delivery_buffer_expired", controlled, {"delivery": delivery_kind})
+		_clear_delivery_charge()
+
+func _controller_actions(delta: float, pressed: Dictionary, charge_passes: bool = false) -> void:
 	if eleven_a_side:
 		_update_team_pressure(bool(pressed.get("teammate_press", false)))
 	if pressed.get("hop", false) and not _can_modify_shot() and not (eleven_a_side and pressed.get("primary", false) and pressed.get("finesse_modifier", false)):
@@ -840,9 +910,13 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 		charging = false
 		charge = 0.0
 		shot_buffer_remaining = 0.0
+		_clear_delivery_charge()
 		return
 	if eleven_a_side and pressed.get("send_run", false):
 		_send_teammate_run()
+	var through := bool(pressed.get("through", false))
+	if through or pressed.get("primary", false):
+		_clear_delivery_charge()
 	if pressed.get("primary", false):
 		shot_buffer_remaining = 0.0
 		var attack := _attacking_contact()
@@ -879,40 +953,42 @@ func _controller_actions(delta: float, pressed: Dictionary) -> void:
 			if eleven_a_side:
 				shot_buffer_direction = _strike_direction()
 				shot_buffer_charge = charge
-				shot_buffer_remaining = SHOT_BUFFER_SECONDS
+				shot_buffer_remaining = STRIKE_BUFFER_SECONDS
 				_record("shot_requested", controlled, {"direction": _vec(shot_buffer_direction), "power": shot_buffer_charge, "style": shot_style})
 			elif controlled.kick(ball, _strike_direction(), lerpf(12, 23, charge), lerpf(0.7, 3.2, charge), "shot"):
 				controlled.pending_receiver_id = ""
 			charging = false
 			charge = 0
-	if pressed.get("pass", false) or pressed.get("through", false) or pressed.get("square", false):
+	if pressed.get("pass", false) or through or pressed.get("square", false):
 		shot_buffer_remaining = 0.0
+		if charge_passes:
+			charging = false
+			charge = 0.0
 	if shot_buffer_remaining > 0.0:
 		var launch := _shot_launch(shot_style, shot_buffer_charge)
 		if controlled.kick(ball, shot_buffer_direction, launch.x, launch.y, "shot", shot_style):
 			controlled.pending_receiver_id = ""
-			_record("shot_queued", controlled, {"buffer_wait_s": SHOT_BUFFER_SECONDS - shot_buffer_remaining, "contact_delay_s": controlled.kick_contact_time, "style": shot_style})
+			_record("shot_queued", controlled, {"buffer_wait_s": STRIKE_BUFFER_SECONDS - shot_buffer_remaining, "contact_delay_s": controlled.kick_contact_time, "style": shot_style})
 			shot_buffer_remaining = 0.0
 			return
 		shot_buffer_remaining = maxf(0.0, shot_buffer_remaining - delta)
 		if shot_buffer_remaining == 0.0:
 			_record("shot_buffer_expired", controlled)
-	if eleven_a_side and (charging or shot_buffer_remaining > 0.0):
-		controlled.shot_setup_ball = ball
-	if pressed.get("square", false):
-		if _attacking_contact():
-			_request_delivery("lob", 12.5, 5.2)
-		else:
-			controlled.slide(ball)
-	if pressed.get("pass", false):
-		if eleven_a_side and ball.last_touch_team == controlled.team and ball.grip_holder_id.is_empty() and not _attacking_contact() and not controlled.chasing_ball(ball):
-			pass_call_remaining = PASS_CALL_SECONDS
-			_record("pass_called", controlled)
-			hud.flash("PASS REQUESTED", 0.85)
-		else:
-			_request_delivery("pass", 10.5, 0.12)
-	if pressed.get("through", false):
-		_request_delivery("through", 13.5, 0.14)
+	if charge_passes:
+		if not through:
+			_tick_powered_delivery(delta, pressed)
+	else:
+		if pressed.get("square", false):
+			if _attacking_contact():
+				_request_delivery("lob", 12.5, 5.2, _strike_direction())
+			else:
+				controlled.slide(ball)
+		if pressed.get("pass", false) and not _call_for_pass_if_off_ball(_attacking_contact()):
+			_request_delivery("pass", 10.5, 0.12, _strike_direction())
+	if through:
+		_request_delivery("through", 13.5, 0.14, _strike_direction())
+	if eleven_a_side and (charging or shot_buffer_remaining > 0.0 or not delivery_kind.is_empty()):
+		controlled.strike_setup_ball = ball
 
 func _clear_offside() -> void:
 	offside_team = -1
@@ -1187,6 +1263,7 @@ func _begin_goal_celebration(scoring: int) -> void:
 	charging = false
 	charge = 0.0
 	shot_buffer_remaining = 0.0
+	_clear_delivery_charge()
 	_set_pressure_teammate(null)
 	_pause_players()
 	hud.flash(message, GOAL_CELEBRATION_SECONDS)
@@ -1233,6 +1310,7 @@ func throw_entering_pitch() -> bool:
 
 func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "", retrieve_ball: bool = false) -> void:
 	_set_throw_hold_player(null)
+	_clear_delivery_charge()
 	_containment.clear()
 	ball.restart_striker_id = ""
 	_clear_offside()
@@ -1646,6 +1724,7 @@ func _tick_throw_in(delta: float) -> void:
 	referee.resume_play()
 
 func _finish_match(abandoned_team: int = -1) -> void:
+	_clear_delivery_charge()
 	reception.reset(ball)
 	for keeper: FootballPlayer in keepers:
 		(keeper as FootballGoalkeeper).drop_ball("full_time")
@@ -1696,11 +1775,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			charging = false
 			charge = 0.0
 			shot_buffer_remaining = 0.0
+			_clear_delivery_charge()
 			_pause_players()
 			paused_ball_frozen = ball.freeze
 			ball.freeze = true
 			var styles := "\nL2 + Circle: standing tackle. Release L2 before shooting.\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
-			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
+			var runs := "\nHold Cross / Space for a longer pass or Square / U for a higher lob.\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
 			var attack_side := "left" if ends_swapped else "right"
 			hud.show_overlay("HALF A BREATH", "Left stick: move + aim. Cross: pass. Triangle: through pass.\nCircle: hold/release shot, or tackle/shoulder in defence." + styles + "\nSquare: lofted pass in attack, sliding tackle in defence.\nR1: timed hop. R2: sprint. L2: shield / jockey. L1 / right stick: switch.\nKeyboard: Space pass / J shot / U lob / I through.\nK tackle / L slide / H shoulder / Ctrl jockey / E hop. Blue attacks %s." % attack_side + runs, "Options / Esc  RESUME     •     Q  EXIT")
 		elif phase == "paused":
@@ -1781,7 +1861,12 @@ func _process(delta: float) -> void:
 	aim_line.position = player_pos + strike_direction * 1.5 + Vector3(0, 0.05, 0)
 	aim_line.rotation.y = atan2(strike_direction.x, strike_direction.z)
 	aim_line.visible = phase == "playing"
-	hud.update_match(scores, remaining, controlled, charge, (2 if ends_swapped else 1) if eleven_a_side else 0)
+	var power_name := "SHOT POWER" if charging else ""
+	var visible_power := charge
+	if not delivery_kind.is_empty() and delivery_buffer_remaining == 0.0:
+		power_name = "LOB POWER" if delivery_kind == "lob" else "PASS POWER"
+		visible_power = _delivery_power()
+	hud.update_match(scores, remaining, controlled, visible_power, (2 if ends_swapped else 1) if eleven_a_side else 0, power_name)
 	if eleven_a_side:
 		var live := phase == "playing" and restart.is_empty() and kickoff_remaining <= 0.0 and not is_instance_valid(kickoff_taker)
 		var receiving_id := ball.pass_receiver_id if live and ball.pass_active and ball.pass_team == 0 else ""

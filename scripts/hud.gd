@@ -6,6 +6,7 @@ var timer_label: Label
 var player_label: Label
 var energy_bar: ProgressBar
 var charge_bar: ProgressBar
+var power_label: Label
 var banner: Label
 var overlay: PanelContainer
 var overlay_title: Label
@@ -60,6 +61,9 @@ func _ready() -> void:
 	player_panel.add_child(energy_bar)
 	energy_bar.size = Vector2(225, 6)
 	_label(player_panel, "STAMINA", 10, MUTED, Vector2(70, 52))
+	power_label = _label(player_panel, "", 10, GOLD, Vector2(180, 52))
+	power_label.size.x = 115
+	power_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	charge_bar = ProgressBar.new()
 	charge_bar.position = Vector2(14, 66)
 	charge_bar.show_percentage = false
@@ -134,7 +138,7 @@ func _label(parent: Control, value: String, size: int, color: Color, pos: Vector
 	parent.add_child(label)
 	return label
 
-func update_match(scores: Array[int], remaining: float, player: FootballPlayer, charge: float, half: int = 0) -> void:
+func update_match(scores: Array[int], remaining: float, player: FootballPlayer, charge: float, half: int = 0, power_name: String = "") -> void:
 	scoreboard.text = "%d  :  %d" % [scores[0], scores[1]]
 	var seconds := int(ceil(remaining))
 	timer_label.text = "%02d:%02d" % [seconds / 60, seconds % 60]
@@ -144,6 +148,7 @@ func update_match(scores: Array[int], remaining: float, player: FootballPlayer, 
 	player_label.text = "%s / %s" % [player.player_name, player.role.to_upper()]
 	energy_bar.value = player.energy * 100
 	charge_bar.value = charge * 100
+	power_label.text = power_name
 
 func flash(message: String, duration: float = 2.0) -> void:
 	banner.text = message

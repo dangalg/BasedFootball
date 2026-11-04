@@ -185,7 +185,7 @@ func _send_axis(axis: int, value: float) -> void:
 func _tick(delta: float) -> void:
 	if _adapter == null:
 		return
-	_player.shot_setup_ball = null
+	_player.strike_setup_ball = null
 	var movement := Input.get_vector("left", "right", "up", "down")
 	_player.intent = Vector3(movement.x, 0, movement.y)
 	if movement.length_squared() > 0.04:
@@ -205,7 +205,7 @@ func _tick(delta: float) -> void:
 		"frame": Engine.get_physics_frames(), "phase": _phase, "move_input": _vec(_player.intent),
 		"circle_pressed": pressed, "circle_released": released, "charging": _adapter.charging,
 		"buffer_s": _adapter.shot_buffer_remaining, "action": _player.action_kind,
-		"setup_considers_ball": _player.shot_setup_ball == _ball,
+		"setup_considers_ball": _player.strike_setup_ball == _ball,
 		"player_position": _vec(_player.global_position), "player_velocity": _vec(_player.linear_velocity),
 		"torso_position": _vec(_player.visual_controller.upper_body.global_position),
 		"facing": _vec(-_player.body_visual.global_basis.z), "ball_position": _vec(_ball.global_position),

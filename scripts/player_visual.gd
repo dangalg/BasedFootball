@@ -161,9 +161,10 @@ func animate(player: Node3D, delta: float) -> void:
 	var kicking := kick_action and not kick_stepping
 	var free_facing: bool = player.action_kind == "" or kick_stepping
 	var facing: Vector3 = player.aim if free_facing else player.action_direction
+	var receiving_drop: bool = player.receiving_active and player.receiving_airborne
 	# Intent can reverse before momentum does. Face the actual running direction
 	# rather than playing a forward run while travelling away from the face.
-	if free_facing and not player.jockey and velocity.length() > 0.65:
+	if free_facing and not player.jockey and not receiving_drop and velocity.length() > 0.65:
 		facing = velocity.normalized()
 	if facing.length_squared() > 0.1:
 		player.body_visual.rotation.y = lerp_angle(player.body_visual.rotation.y, atan2(-facing.x, -facing.z), 12.0 * delta)
