@@ -116,12 +116,16 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	elif teammate_chaser != null:
 		nearest = teammate_chaser
 		teammate_holder = teammate_chaser
-	# Keep the other two players available while the designated receiver meets
-	# the flight. They can still intercept a loose ball after that intent ends.
-	if ball.pass_active and ball.pass_team == player.team:
+	var friendly_delivery := ball.pass_active and ball.pass_team == player.team
+	var flight_receiver: FootballPlayer = null
+	# Give the receiver the ball task, and let the next outlets start moving
+	# toward the point where the receiver can actually meet the delivery.
+	if friendly_delivery:
 		for other in players:
 			if other.player_id == ball.pass_receiver_id:
 				nearest = other
+				if eleven and other.team == player.team and not other.is_goalkeeper and other.upright_ready():
+					flight_receiver = other
 				break
 	if not ball.grip_holder_id.is_empty():
 		if eleven:
@@ -135,12 +139,22 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	elif eleven and opponent_carrier != null and pressure_teammate != null \
 			and pressure_teammate.team == player.team and not pressure_teammate.selected \
 			and not pressure_teammate.is_goalkeeper and pressure_teammate.upright_ready() \
-			and not (ball.pass_active and ball.pass_team == player.team):
+			and not friendly_delivery:
 		nearest = pressure_teammate
 	var target := ball.global_position
+	var forward_outlet := false
 	if eleven and nearest != player:
-		var attacking := teammate_holder != null or (ball.pass_active and ball.pass_team == player.team)
-		target = _eleven_shape_target(player, players, ball.global_position, nearest, teammate_holder, opponent_carrier, attacking, attack)
+		var support_carrier := flight_receiver if flight_receiver != null and ball.grip_holder_id.is_empty() else teammate_holder
+		var outlet := Vector3.INF
+		if support_carrier != null and support_carrier.eleven_slot >= 0 and not support_carrier.is_goalkeeper:
+			var support_origin := ball.pass_target if support_carrier == flight_receiver else ball.global_position
+			outlet = _eleven_outlet_target(player, players, ball.global_position, support_origin, support_carrier, attack)
+		if outlet != Vector3.INF:
+			target = outlet
+			forward_outlet = true
+		else:
+			var attacking := teammate_holder != null or friendly_delivery
+			target = _eleven_shape_target(player, players, ball.global_position, nearest, support_carrier, opponent_carrier, attacking, attack)
 	elif nearest != player:
 		var lane := (-5.0 if player.shirt_number == 7 else 5.0) + player.ai_lane_offset
 		if player.shirt_number == 4:
@@ -182,7 +196,9 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 	var catch_up_run := chasing and direction.length() > 0.7 and Vector3(ball.linear_velocity.x, 0, ball.linear_velocity.z).length() > player.pace * 0.6
 	var sprint_distance := 5.5 if level < 0 else (3.2 if level > 0 else 4.0)
 	var sprint_readiness := 0.65 if level < 0 else (0.94 if level > 0 else 0.85)
-	player.sprint = nearest == player and (direction.length() > sprint_distance or catch_up_run) and player.energy > 0.25 and confidence < sprint_readiness
+	var outlet_run := forward_outlet and direction.x * attack > 2.0 and direction.length() > sprint_distance
+	var chase_run := nearest == player and (direction.length() > sprint_distance or catch_up_run)
+	player.sprint = (outlet_run or chase_run) and player.energy > 0.25 and confidence < sprint_readiness
 	# Defenders use the same finite contact windows and recovery as the controller.
 	if ball.grip_holder_id.is_empty() and opponent_carrier != null and nearest == player:
 		if level < 0:
@@ -417,10 +433,6 @@ static func _eleven_anchor(player: FootballPlayer, ball_position: Vector3, attac
 static func _eleven_shape_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, chaser: FootballPlayer, carrier: FootballPlayer, opponent_carrier: FootballPlayer, attacking: bool, attack: float) -> Vector3:
 	var anchor := _eleven_anchor(player, ball_position, attacking, attack)
 	if attacking:
-		if carrier != null and carrier.eleven_slot >= 0 and not carrier.is_goalkeeper:
-			var outlet := _eleven_outlet_target(player, players, ball_position, carrier, attack)
-			if outlet != Vector3.INF:
-				return outlet
 		# Nearby support can step sideways out of a blocked passing lane.
 		if carrier != null and anchor.distance_to(ball_position) <= ELEVEN_MAX_PASS_DISTANCE:
 			var clearance := _lane_clearance(ball_position, anchor, 12.0, players, player.team)
@@ -493,28 +505,33 @@ static func choose_called_runner(carrier: FootballPlayer, players: Array[Footbal
 			best_score = score
 	return best
 
-static func _eleven_outlet_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, carrier: FootballPlayer, attack: float) -> Vector3:
-	var ball_side := ball_position.z if absf(ball_position.z) > 5.0 else carrier.eleven_home.z
+static func _eleven_outlet_target(player: FootballPlayer, players: Array[FootballPlayer], ball_position: Vector3, origin: Vector3, carrier: FootballPlayer, attack: float) -> Vector3:
+	var ball_side := origin.z if absf(origin.z) > 5.0 else carrier.eleven_home.z
 	var side := -1.0 if ball_side > 0.0 else 1.0
 	var ball_depth := ball_position.x * attack
-	var short_depth := minf(ball_depth + 8.0, 41.0)
-	var run_depth := minf(ball_depth + 15.0, 46.0)
-	var short_lane := clampf(ball_position.z + side * 7.0, -25.0, 25.0)
-	var run_lane := clampf(ball_position.z - side * 8.0, -24.0, 24.0)
+	var receive_depth := origin.x * attack
+	var protect_back_line := maxf(ball_depth, receive_depth) > -22.0
+	var onside_depth := ElevenOffside.line(players, player.team, attack, ball_position.x) - 0.65
+	var short_depth := minf(receive_depth + 8.0, minf(41.0, onside_depth))
+	var run_depth := minf(receive_depth + 15.0, minf(46.0, onside_depth))
+	var short_lane := clampf(origin.z + side * 7.0, -25.0, 25.0)
+	var run_lane := clampf(origin.z - side * 8.0, -24.0, 24.0)
 	var short_target := Vector3(short_depth * attack, 0.0, short_lane)
 	var run_target := Vector3(run_depth * attack, 0.0, run_lane)
 	var assigned: FootballPlayer = null
 	for target: Vector3 in [short_target, run_target]:
+		if target.x * attack < receive_depth + 2.5:
+			continue
 		var best := INF
 		var outlet: FootballPlayer = null
 		for teammate: FootballPlayer in players:
 			if teammate == carrier or teammate == assigned or teammate.team != player.team or teammate.selected or teammate.is_goalkeeper or teammate.ragdoll != null:
 				continue
-			if teammate.hop_active or teammate.recovery_remaining > 0.0 or teammate.stagger_remaining > 0.0:
+			if teammate.hop_active or teammate.recovery_remaining > 0.0 or teammate.stagger_remaining > 0.0 or teammate.called_run_remaining > 0.0:
 				continue
 			var home := _eleven_anchor(teammate, ball_position, true, attack)
 			var anchor_gap := home.distance_to(target)
-			if anchor_gap > 26.0 or (teammate.eleven_slot >= 6 and ball_depth > -22.0):
+			if anchor_gap > 26.0 or (teammate.eleven_slot >= 6 and protect_back_line):
 				continue
 			var cost := anchor_gap + _flat(teammate.global_position - target).length() * 0.30
 			if cost < best:
@@ -522,10 +539,10 @@ static func _eleven_outlet_target(player: FootballPlayer, players: Array[Footbal
 				best = cost
 		if outlet == player:
 			var best_target := target
-			var best_lane := _lane_clearance(ball_position, target, 12.0, players, player.team)
+			var best_lane := _lane_clearance(origin, target, 12.0, players, player.team)
 			for shift: float in [-2.5, 2.5]:
 				var alternative := Vector3(target.x, 0.0, clampf(target.z + shift, -28.0, 28.0))
-				var lane := _lane_clearance(ball_position, alternative, 12.0, players, player.team)
+				var lane := _lane_clearance(origin, alternative, 12.0, players, player.team)
 				if lane > best_lane + 0.25:
 					best_lane = lane
 					best_target = alternative

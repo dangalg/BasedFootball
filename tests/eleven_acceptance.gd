@@ -8,6 +8,7 @@ extends SceneTree
 const SCENE_PATH := "res://scenes/eleven_match.tscn"
 const JoypadDriver := preload("res://tests/eleven_joypad_driver.gd")
 const JoypadReceipts := preload("res://tests/eleven_joypad_receipts.gd")
+const PassSupportProbe := preload("res://tests/eleven_pass_support_probe.gd")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
 const MATCH_SECONDS := 180.0
 const CLOCK_STALL_SECONDS := 15.0
@@ -77,6 +78,7 @@ var _driver: Node
 var _retail_joypad := false
 var _event_frames: Array[int] = []
 var _retail_touches: Array[Dictionary] = []
+var _pass_support := PassSupportProbe.new()
 var _report_path := ""
 var _frames := 0
 var _max_frames := 0
@@ -262,6 +264,8 @@ func _spread(field: Array) -> Vector2:
 func _observe() -> void:
 	_frames += 1
 	_observe_restarts()
+	if _retail_joypad:
+		_pass_support.sample(_game, Engine.get_physics_frames() - 1)
 	if _throw_entry_check:
 		_observe_throw_entry()
 	_observe_clock()
@@ -486,6 +490,10 @@ func _finish() -> void:
 		retail = JoypadReceipts.summarize(_game, _driver.inputs, _event_frames, _retail_touches)
 		checks.merge(retail["checks"])
 		checks["retail_input_path"] = _game.decision_driver == null and _driver.joy_events > 0
+		var pass_support := _pass_support.summarize(_game, _retail_touches)
+		retail["pass_support"] = pass_support
+		checks["onside_support_arrives_before_live_reception"] = int(pass_support["flight_support_witnesses"]) > 0
+		checks["home_completes_live_forward_pass"] = int(pass_support["forward_completions"]) > 0
 		_driver.release_input()
 	var passed := not checks.values().has(false)
 	var hz := float(Engine.physics_ticks_per_second)
