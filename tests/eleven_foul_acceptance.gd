@@ -3,6 +3,7 @@ extends SceneTree
 ## --headless --script res://tests/eleven_foul_acceptance.gd
 ## -- --eleven-acceptance --report=<fresh absolute JSON path>
 ## --discipline-acceptance checks two midfield cautions and rematch restoration.
+## --foul-recovery-acceptance records the midfield fall, get-up and restart.
 
 const MATCH := preload("res://scenes/eleven_match.tscn")
 const SAVE_PATH := "user://eleven_acceptance_squad.json"
@@ -32,7 +33,9 @@ func _run() -> void:
 		quit(2)
 		return
 	var report: Dictionary
-	if "--discipline-acceptance" in arguments:
+	if "--foul-recovery-acceptance" in arguments:
+		report = await _exercise(game, false, true)
+	elif "--discipline-acceptance" in arguments:
 		report = await _exercise_discipline(game)
 	else:
 		var midfield := await _exercise(game, false)
@@ -107,7 +110,7 @@ func _exercise_discipline(game: Node3D) -> Dictionary:
 	}
 
 
-func _exercise(game: Node3D, penalty: bool) -> Dictionary:
+func _exercise(game: Node3D, penalty: bool, record_recovery := false) -> Dictionary:
 	_slide_contact.clear()
 	var victim: FootballPlayer = game.controlled
 	var attacker: FootballPlayer = game.away_outfield[0]
@@ -123,6 +126,13 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 	_place(attacker, origin + Vector3.RIGHT * 1.8, Vector3.LEFT)
 	ball.global_position = origin + Vector3(-4.0, FootballBall.RADIUS - origin.y, -3.0)
 	ball.reset_physics_interpolation()
+	var camera: Camera3D
+	if record_recovery:
+		camera = Camera3D.new()
+		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+		game.add_child(camera)
+		camera.make_current()
+		_frame_recovery(camera, victim.global_position, attacker.global_position)
 	# Let the fixture settle without ordinary AI taking over the slide setup.
 	for _frame in range(ceili(0.23 * hz)):
 		await physics_frame
@@ -139,12 +149,16 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 	var queued := attacker.slide(ball)
 	for _frame in range(ceili(0.55 * hz)):
 		await physics_frame
+		if record_recovery:
+			_frame_recovery(camera, victim.global_position, attacker.global_position)
 		if not _slide_contact.is_empty():
 			break
 	var restart_state: Dictionary = {}
 	var clock_at_award := -1.0
 	var resumed := false
-	for _frame in range(ceili(5.4 * hz)):
+	var recovery_samples: Array[Dictionary] = []
+	var tail_frames := 0
+	for _frame in range(ceili((8.0 if record_recovery else 5.4) * hz)):
 		await physics_frame
 		if restart_state.is_empty() and game.restart.get("kind") == restart_kind:
 			var taker: FootballPlayer = game.restart["taker"]
@@ -154,7 +168,19 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 			clock_at_award = game.remaining
 		if not restart_state.is_empty() and game.restart.is_empty() and float(game.remaining) < clock_at_award - 0.08:
 			resumed = true
-			break
+			if not record_recovery:
+				break
+		if record_recovery:
+			var secondary := ball.global_position if not game.restart.is_empty() else victim.global_position
+			if restart_state.is_empty():
+				secondary = attacker.global_position
+			_frame_recovery(camera, victim.global_position, secondary)
+			if not restart_state.is_empty():
+				recovery_samples.append(_sample_recovery(victim))
+				if resumed and victim.ragdoll == null:
+					tail_frames += 1
+					if tail_frames >= ceili(0.42 * hz):
+						break
 	attacker.physical_event.disconnect(capture)
 	var events: Array = game.action_log.slice(first_event)
 	var foul := _event(events, "foul", attacker.player_id)
@@ -182,12 +208,62 @@ func _exercise(game: Node3D, penalty: bool) -> Dictionary:
 	}
 	if penalty:
 		checks["penalty_keeper_on_goal_line"] = absf(float(restart_state.get("keeper_x", 0.0)) - ElevenPitch.HALF_LENGTH) <= 0.06
+	if record_recovery:
+		checks.merge(_check_recovery(recovery_samples, events, victim.player_id, hz))
 	return {
 		"passed": not checks.values().has(false), "checks": checks,
 		"fixture": "Initial placements, referee facing and attacker run-up only. The production slide sweep, foul decision and restart own the outcome.",
 		"attacker": attacker.player_id, "victim": victim.player_id, "seed_serial": seed_serial,
 		"slide_contact": _slide_contact.duplicate(true), "restart": restart_state,
 		"match_action_log": events, "impulse_audit": ball.impulse_audit.duplicate(true),
+		"recovery_samples": recovery_samples,
+	}
+
+
+func _frame_recovery(camera: Camera3D, player_position: Vector3, secondary_position: Vector3) -> void:
+	var separation := FootballReception.flat(secondary_position - player_position).limit_length(5.0)
+	var focus := player_position + separation * 0.42 + Vector3.UP * 0.74
+	camera.size = 4.2 + separation.length() * 0.65
+	camera.position = focus + Vector3(1.5, 3.4, 8.0)
+	camera.look_at(focus)
+
+
+func _sample_recovery(victim: FootballPlayer) -> Dictionary:
+	var ragdoll := victim.ragdoll
+	var sample := {
+		"frame": Engine.get_physics_frames(),
+		"ragdoll": ragdoll.get_instance_id() if ragdoll != null else 0,
+		"getting_up": victim.getting_up,
+		"original_visible": victim.body_visual.visible,
+		"collision_layer": victim.collision_layer, "collision_mask": victim.collision_mask,
+		"capsule_frozen": victim.freeze,
+	}
+	if ragdoll != null:
+		sample["torso_height_m"] = ragdoll.torso.global_position.y
+		sample["torso_up_dot"] = absf(ragdoll.torso.global_basis.y.dot(Vector3.UP))
+		sample["torso_dynamic"] = not ragdoll.torso.freeze
+	return sample
+
+
+func _check_recovery(samples: Array[Dictionary], events: Array, victim_id: String, hz: int) -> Dictionary:
+	var ragdoll_id := int(_slide_contact.get("ragdoll", 0))
+	var same_fall_at_whistle := not samples.is_empty() and ragdoll_id != 0 and int(samples[0]["ragdoll"]) == ragdoll_id
+	var live_frames := 0
+	var rise_frames := 0
+	var grounded := false
+	var restored := false
+	for sample in samples:
+		if int(sample["ragdoll"]) == ragdoll_id and ragdoll_id != 0:
+			if sample.get("torso_dynamic", false) and not sample["original_visible"]:
+				live_frames += 1
+				grounded = grounded or (float(sample["torso_height_m"]) < 0.48 and float(sample["torso_up_dot"]) < 0.60)
+			rise_frames += int(sample["getting_up"])
+		elif rise_frames > 0 and int(sample["ragdoll"]) == 0:
+			restored = restored or (sample["original_visible"] and not sample["capsule_frozen"] and int(sample["collision_layer"]) == 1 and int(sample["collision_mask"]) == 1)
+	return {
+		"same_dynamic_ragdoll_after_whistle": same_fall_at_whistle and live_frames >= ceili(0.20 * hz),
+		"physical_fall_reached_turf": grounded and not _event(events, "fall", victim_id).is_empty(),
+		"original_player_restored_after_get_up": rise_frames >= ceili(0.25 * hz) and restored and not _event(events, "get_up", victim_id).is_empty() and _event(events, "fall_reset", victim_id).is_empty(),
 	}
 
 
@@ -202,6 +278,7 @@ func _capture_slide(kind: String, detail: Dictionary, victim: FootballPlayer, ba
 	_slide_contact["referee_position"] = _vector(referee.global_position)
 	_slide_contact["ball_gap_m"] = FootballReception.flat(ball.global_position - spot).length()
 	_slide_contact["touch_serial"] = ball.touch_serial
+	_slide_contact["ragdoll"] = victim.ragdoll.get_instance_id() if victim.ragdoll != null else 0
 
 
 func _place(player: FootballPlayer, position: Vector3, aim: Vector3) -> void:

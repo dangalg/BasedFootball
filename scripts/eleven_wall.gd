@@ -32,7 +32,7 @@ func _init(ball_spot: Vector3, direction: Vector3, defenders: Array[FootballPlay
 func update_positions(defenders: Array[FootballPlayer], manual_player: FootballPlayer) -> bool:
 	var ready := true
 	for defender in defenders:
-		if defender == manual_player:
+		if defender == manual_player or defender.ragdoll != null:
 			continue
 		var slot := members.find(defender)
 		var away := FootballReception.flat(defender.global_position - spot)
@@ -62,7 +62,7 @@ func clear_attacking_players(attackers: Array[FootballPlayer], taker: FootballPl
 	var lateral := goalward.cross(Vector3.UP)
 	var ready := true
 	for player in attackers:
-		if player == taker:
+		if player == taker or player.ragdoll != null:
 			continue
 		var offset := FootballReception.flat(player.global_position - center)
 		var depth := offset.dot(goalward)

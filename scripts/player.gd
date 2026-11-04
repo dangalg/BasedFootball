@@ -1223,16 +1223,18 @@ func _slide_player_contacts(boot: Vector3) -> void:
 		apply_central_impulse(-impulse)
 		physical_event.emit("slide_body_contact", {"victim": other.player_id, "speed": closing, "distance": closest, "contact": contact, "ball_first": action_has_hit})
 
-func reset_action() -> void:
+func reset_action(keep_fall: bool = false) -> void:
 	called_run_remaining = 0.0
 	throw_in_phase = -1.0
 	throw_in_recovery = 0.0
 	sole_stop_active = false
 	receive_exit_direction = Vector3.ZERO
 	kick_style = ""
-	if ragdoll != null:
+	if ragdoll != null and not keep_fall:
 		ragdoll.finish(true)
-	getting_up = false
+	if ragdoll == null:
+		getting_up = false
+		recovery_remaining = 0.0
 	hop_active = false
 	hop_launched = false
 	hop_elapsed = 0
@@ -1245,7 +1247,6 @@ func reset_action() -> void:
 	kick_impact_time = -1.0
 	tackle_remaining = 0
 	tackle_cooldown = 0
-	recovery_remaining = 0
 	stagger_remaining = 0
 	close_control_remaining = 0
 	control_stride_remaining = 0

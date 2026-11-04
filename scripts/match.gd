@@ -1261,7 +1261,7 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "",
 	for player: FootballPlayer in players:
 		player.intent = Vector3.ZERO
 		player.sprint = false
-		player.reset_action()
+		player.reset_action(kind == "direct_free_kick" and player != taker)
 	var inward := Vector3(-signf(spot.x) if kind != "throw_in" else 0.0, 0.0, -signf(spot.z) if kind != "goal_kick" else 0.0).normalized()
 	if kind in ["direct_free_kick", "indirect_free_kick", "penalty"]:
 		inward = Vector3.RIGHT * taker.attack_sign()
@@ -1402,7 +1402,7 @@ func _tick_restart(delta: float) -> void:
 		var wall: ElevenWall = restart.wall
 		var taker_team: int = restart.taker.team
 		var manual_defender: FootballPlayer = restart.manual_defender
-		if manual_defender != null:
+		if manual_defender != null and manual_defender.ragdoll == null:
 			var movement := Input.get_vector("left", "right", "up", "down")
 			manual_defender.intent = Vector3(movement.x, 0.0, movement.y)
 			if movement.length_squared() > 0.04:
@@ -1417,7 +1417,7 @@ func _tick_restart(delta: float) -> void:
 			_record("wall_ready", restart.taker, {"formed": wall_ready, "marked": referee.wall_marked})
 			sound.play_event("whistle")
 			var notice: String = restart.banner
-			if manual_defender != null and FootballReception.flat(manual_defender.global_position - wall.spot).length() < ElevenWall.MIN_DISTANCE:
+			if manual_defender != null and manual_defender.ragdoll == null and FootballReception.flat(manual_defender.global_position - wall.spot).length() < ElevenWall.MIN_DISTANCE:
 				notice += "  /  BACK UP 9.15 M"
 			hud.flash(notice, 3.0)
 	if restart.has("throw_direction"):
