@@ -13,6 +13,7 @@ const CAUTION_SLIDE_SPEED := 6.0
 const DISMISSAL_SLIDE_SPEED := 10.5
 const THROW_WINDUP := 0.58
 const THROW_MIN_INWARD := 0.32
+const ATTENDANT_PICKUP_TIMEOUT := 3.7
 const ELEVEN_ANCHORS: Array[Vector2] = [
 	Vector2(6, 0), Vector2(11, -22), Vector2(11, 22),
 	Vector2(20, -12), Vector2(20, 12), Vector2(25, 0),
@@ -35,6 +36,7 @@ const ELEVEN_FORMATIONS := [
 var restart: Dictionary = {}
 var throw_entry_side := 0.0
 var throw_entry_time := 0.0
+var throw_hold_player: FootballPlayer
 var offside_team := -1
 var offside_candidates: Dictionary = {}
 var pending_indirect_player: FootballPlayer
@@ -51,6 +53,7 @@ var keepers: Array[FootballPlayer] = []
 var reception := FootballReception.new()
 var ball: FootballBall
 var referee: ElevenReferee
+var attendants: Array[ElevenAttendant] = []
 var camera: Camera3D
 var hud: FootballHUD
 var sound: FootballSound
@@ -93,6 +96,7 @@ var action_log: Array[Dictionary] = []
 var match_count: int = 0
 var acceptance: bool = false
 var pause_requested: bool = false
+var paused_ball_frozen := false
 var decision_driver: Node
 var pause_states: Array[Dictionary] = []
 
@@ -126,6 +130,7 @@ func _ready() -> void:
 		referee.name = "Referee"
 		referee.position = Vector3(-6.0, 0.0, 7.0)
 		add_child(referee)
+		_build_attendants()
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 48 if eleven_a_side else 43
@@ -182,6 +187,15 @@ func _show_match_setup() -> void:
 	match_menu.difficulty_choice.select(opponent_difficulty)
 	match_menu.select_formation(home_formation)
 	match_menu.kickoff_requested.connect(_start_configured_match)
+
+func _build_attendants() -> void:
+	for side in [-1.0, 1.0]:
+		for lane in [-36.0, -12.0, 12.0, 36.0]:
+			var attendant := ElevenAttendant.new()
+			attendant.home_position = Vector3(lane, 0.0, side * 34.4)
+			attendant.position = attendant.home_position
+			add_child(attendant)
+			attendants.append(attendant)
 
 func _start_configured_match(seconds: float, difficulty: int, formation: int) -> void:
 	match_duration = seconds if seconds in [180.0, 360.0, 600.0] else DURATION
@@ -405,6 +419,7 @@ func _outfield_count() -> int:
 	return ELEVEN_ANCHORS.size() if eleven_a_side else 3
 
 func reset_positions(kickoff_team: int) -> void:
+	_set_throw_hold_player(null)
 	_clear_offside()
 	pending_foul.clear()
 	indirect_taker = null
@@ -586,6 +601,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if phase != "playing":
 		return
+	_return_attendants(delta)
 	if _award_indirect_restart() or _award_foul():
 		return
 	if not restart.is_empty():
@@ -1157,7 +1173,7 @@ func _check_eleven_boundary(delta: float) -> void:
 		throw_entry_time = 0.0
 	if absf(point.z) > ElevenPitch.HALF_WIDTH + radius:
 		var spot := Vector3(clampf(point.x, -49.5, 49.5), radius, signf(point.z) * 31.85)
-		_begin_restart("throw_in", 1 if ball.last_touch_team == 0 else 0, spot)
+		_begin_restart("throw_in", 1 if ball.last_touch_team == 0 else 0, spot, "", true)
 	elif absf(point.x) > ElevenPitch.HALF_LENGTH + radius:
 		var defender := 0 if point.x * keepers[0].attack_sign() < 0 else 1
 		if ball.last_touch_team == defender:
@@ -1171,7 +1187,8 @@ func throw_entering_pitch() -> bool:
 	var point := ball.global_position
 	return throw_entry_time > 0.0 and point.z * throw_entry_side > ElevenPitch.HALF_WIDTH - FootballBall.RADIUS and ball.linear_velocity.z * throw_entry_side < 0.0 and absf(point.x) <= ElevenPitch.HALF_LENGTH + FootballBall.RADIUS
 
-func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "") -> void:
+func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "", retrieve_ball: bool = false) -> void:
+	_set_throw_hold_player(null)
 	_clear_offside()
 	pending_foul.clear()
 	indirect_taker = null
@@ -1208,21 +1225,25 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "")
 	if kind == "penalty":
 		_set_penalty_positions(taker)
 	var stance_distance := 0.8 if kind == "throw_in" else 0.55
-	taker.global_position = Vector3(spot.x, 0.06, spot.z) - inward * stance_distance
-	taker.aim = inward
+	var stance := Vector3(spot.x, 0.06, spot.z) - inward * stance_distance
+	# Keep the thrower on the pitch side of the outbound roll until it is collected.
+	taker.global_position = stance + inward * 1.40 if retrieve_ball else stance
+	taker.aim = -inward if retrieve_ball else inward
 	if kind != "throw_in":
 		taker.kick_cooldown = 0.0
 	taker.linear_velocity = Vector3.ZERO
 	taker.angular_velocity = Vector3.ZERO
 	taker.reset_physics_interpolation()
-	ball.freeze = true
 	ball.clear_finesse()
-	ball.global_position = spot
-	ball.linear_velocity = Vector3.ZERO
-	ball.angular_velocity = Vector3.ZERO
-	ball.reset_physics_interpolation()
-	if kind == "throw_in":
+	if not retrieve_ball:
+		ball.freeze = true
+		ball.global_position = spot
+		ball.linear_velocity = Vector3.ZERO
+		ball.angular_velocity = Vector3.ZERO
+		ball.reset_physics_interpolation()
+	if kind == "throw_in" and not retrieve_ball:
 		taker.throw_in_phase = 0.0
+		_set_throw_hold_player(taker)
 		ball.global_position = taker.visual_controller.throw_in_hand_center(taker)
 		ball.reset_physics_interpolation()
 	var human := team == 0 and not taker.is_goalkeeper and decision_driver == null and not acceptance
@@ -1239,6 +1260,10 @@ func _begin_restart(kind: String, team: int, spot: Vector3, notice: String = "")
 			restart.manual_defender = manual_defender
 			referee.prepare_wall(spot, inward, ElevenWall.MIN_DISTANCE)
 	_record(kind, taker)
+	if retrieve_ball:
+		restart.throw_stance = stance
+		_start_attendant_retrieval(spot)
+		return
 	var hint := "  /  CROSS OR SPACE TO TAKE" if human else ""
 	if human and kind in ["direct_free_kick", "penalty"]:
 		hint = "  /  HOLD CIRCLE OR J TO SHOOT"
@@ -1281,6 +1306,8 @@ func _request_restart_strike(direction: Vector3, kind: String, speed: float, lif
 	restart.strike_lift = lift
 
 func _tick_restart(delta: float) -> void:
+	if restart.has("attendant") and _tick_attendant_retrieval(delta):
+		return
 	if restart.has("wall"):
 		var wall: ElevenWall = restart.wall
 		var taker_team: int = restart.taker.team
@@ -1397,6 +1424,107 @@ func _tick_restart(delta: float) -> void:
 	restart.throw_speed = speed
 	restart.throw_receiver_id = receiver.player_id if receiver != null else ""
 
+func _return_attendants(delta: float) -> void:
+	var active: ElevenAttendant = restart.get("attendant")
+	for attendant in attendants:
+		if attendant == active:
+			continue
+		if attendant.position.distance_squared_to(attendant.home_position) > 0.03:
+			attendant.walk_to(attendant.home_position, delta, false)
+		elif not attendant.settled():
+			attendant.idle(delta)
+
+func _start_attendant_retrieval(spot: Vector3) -> void:
+	var nearest: ElevenAttendant = null
+	var best := INF
+	for attendant in attendants:
+		if signf(attendant.home_position.z) != signf(spot.z):
+			continue
+		var distance := attendant.position.distance_squared_to(spot)
+		if distance < best:
+			best = distance
+			nearest = attendant
+	restart.attendant = nearest
+	restart.attendant_stage = "retrieve"
+	restart.attendant_elapsed = 0.0
+	_record("attendant_called", null, {"ball": _vec(ball.global_position)})
+	hud.flash("BALL OUT  /  ATTENDANT RETRIEVING", 4.0)
+
+func _tick_attendant_retrieval(delta: float) -> bool:
+	var attendant: ElevenAttendant = restart.attendant
+	var taker: FootballPlayer = restart.taker
+	var inward: Vector3 = restart.inward
+	restart.attendant_elapsed += delta
+	if restart.attendant_stage == "retrieve":
+		var position := ball.global_position
+		var reach := FootballReception.flat(position - attendant.position).length()
+		var spare := float(restart.attendant_elapsed) > ATTENDANT_PICKUP_TIMEOUT or absf(position.z) > 46.0 or absf(position.x) > 63.0 or position.y < -0.5
+		if not spare:
+			if reach <= 0.69 and position.y < 0.48:
+				attendant.reach_to(position, delta)
+			else:
+				var lead := FootballReception.flat(ball.linear_velocity).limit_length(8.0) * 0.13
+				var target := FootballReception.flat(position) + lead - inward * 0.49
+				target.z = signf(attendant.home_position.z) * maxf(absf(target.z), 32.2)
+				attendant.walk_to(target, delta, false)
+		var gap := attendant.hold_ball().distance_to(position)
+		if not spare and gap > 0.18:
+			return true
+		ball.freeze = true
+		ball.linear_velocity = Vector3.ZERO
+		ball.angular_velocity = Vector3.ZERO
+		ball.global_position = attendant.hold_ball()
+		restart.attendant_stage = "carry"
+		restart.attendant_elapsed = 0.0
+		_record("attendant_spare" if spare else "attendant_pickup", null, {"ball": _vec(position), "hand_gap_m": gap})
+		return true
+	if taker.throw_in_phase < 0.0:
+		var stance: Vector3 = restart.throw_stance
+		var offset := FootballReception.flat(stance - taker.global_position)
+		taker.intent = (offset * 0.72).limit_length(0.65) if offset.length_squared() > 0.08 * 0.08 else Vector3.ZERO
+		var speed := FootballReception.flat(taker.linear_velocity).length()
+		var settled := offset.length_squared() < 0.13 * 0.13 and speed < 0.30
+		if settled or float(restart.attendant_elapsed) > 2.4:
+			if not settled:
+				_place_restart_player(taker, stance)
+				_record("thrower_stance_assisted", taker)
+			taker.intent = Vector3.ZERO
+			taker.throw_in_phase = 0.0
+		attendant.walk_to(FootballReception.flat(stance) - inward * 0.87, delta, true)
+		ball.global_position = attendant.hold_ball()
+		return true
+	var taker_hand := taker.visual_controller.throw_in_hand_center(taker)
+	var meeting_point := FootballReception.flat(taker_hand) - inward * 0.47
+	if restart.attendant_stage == "carry":
+		attendant.walk_to(meeting_point, delta, true)
+		ball.global_position = attendant.hold_ball()
+		if attendant.position.distance_squared_to(meeting_point) <= 0.17 * 0.17:
+			restart.attendant_stage = "handoff"
+			restart.attendant_elapsed = 0.0
+		return true
+	attendant.reach_to(taker_hand, delta)
+	ball.global_position = attendant.hold_ball()
+	var hand_gap := ball.global_position.distance_to(taker_hand)
+	if hand_gap > 0.10 and float(restart.attendant_elapsed) <= 1.2:
+		return true
+	ball.global_position = taker_hand
+	_set_throw_hold_player(taker)
+	taker.aim = inward
+	_record("attendant_handoff", taker, {"ball": _vec(taker_hand), "hand_gap_m": hand_gap})
+	restart.erase("attendant")
+	restart.erase("attendant_stage")
+	hud.flash("THROW IN" + ("  /  CROSS OR SPACE TO TAKE" if bool(restart.human) else ""), 3.0)
+	return false
+
+func _set_throw_hold_player(player: FootballPlayer) -> void:
+	if throw_hold_player == player:
+		return
+	if throw_hold_player != null:
+		ball.remove_collision_exception_with(throw_hold_player)
+	throw_hold_player = player
+	if player != null:
+		ball.add_collision_exception_with(player)
+
 func _tick_throw_in(delta: float) -> void:
 	var taker: FootballPlayer = restart.taker
 	var hand_center := taker.visual_controller.throw_in_hand_center(taker)
@@ -1412,12 +1540,14 @@ func _tick_throw_in(delta: float) -> void:
 	taker.throw_in_recovery = 0.18
 	throw_entry_side = -signf((restart.inward as Vector3).z)
 	throw_entry_time = 0.45
+	_set_throw_hold_player(null)
 	ball.freeze = false
 	ball.sleeping = false
 	ball.touch(taker.team, taker.player_id, release_velocity * ball.mass)
 	reception.queue_delivery(taker, "throw", ball, str(restart.throw_receiver_id))
 	_record("restart_taken", taker, {
 		"restart": "throw_in", "hand_center": _vec(hand_center), "release_position": _vec(ball.global_position),
+		"thrower_position": _vec(taker.global_position),
 		"release_velocity": _vec(release_velocity), "touch_serial": ball.touch_serial,
 	})
 	restart.clear()
@@ -1475,6 +1605,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			charge = 0.0
 			shot_buffer_remaining = 0.0
 			_pause_players()
+			paused_ball_frozen = ball.freeze
 			ball.freeze = true
 			var styles := "\nHold R1 for finesse, L1 for chip, or both for power before Circle. Keyboard modifiers: R and F." if eleven_a_side else ""
 			var runs := "\nD-pad up / G: send a runner. Cross / Space off the ball: ask for a pass.\nHold D-pad down / T: teammate pressure in defence." if eleven_a_side else ""
@@ -1483,7 +1614,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif phase == "paused":
 			phase = "playing"
 			_resume_players()
-			ball.freeze = false
+			ball.freeze = paused_ball_frozen
 			hud.overlay.hide()
 	elif phase == "finished" and eleven_a_side and event.is_action_pressed("match_setup"):
 		_show_match_setup()
@@ -1524,7 +1655,9 @@ func _process(delta: float) -> void:
 	var focus := ball_pos * 0.3
 	var offset := Vector3(0.0, 34.0, 29.0)
 	var on_goal := phase == "goal_celebration"
-	var blend := 1.0 - exp(-delta * (5.0 if on_goal else 3.0))
+	var on_handoff := phase == "playing" and restart.has("attendant")
+	var close_view := on_goal or on_handoff
+	var blend := 1.0 - exp(-delta * (5.0 if close_view else 3.0))
 	if eleven_a_side:
 		var between := FootballReception.flat(player_pos - ball_pos)
 		focus = ball_pos + between.limit_length(30.0) * 0.40
@@ -1533,12 +1666,21 @@ func _process(delta: float) -> void:
 			focus = celebration_focus + Vector3.UP * 0.7
 			offset = Vector3(signf(celebration_focus.x) * 5.5, 5.6, 9.0)
 			zoom = celebration_zoom
+		elif on_handoff:
+			var thrower: FootballPlayer = restart.taker
+			var thrower_position := thrower.get_global_transform_interpolated().origin
+			var spread := FootballReception.flat(thrower_position - ball_pos).length()
+			focus = ball_pos.lerp(thrower_position, 0.42)
+			focus.y = 0.65
+			offset = Vector3(0.0, 9.5, 11.0)
+			zoom = clampf(16.0 + spread * 0.65, 17.5, 33.0)
 		camera.size = lerpf(camera.size, zoom, blend)
-	var horizontal_limit := 48.0 if on_goal else (37.0 if eleven_a_side else 2.5)
+	var horizontal_limit := 48.0 if close_view else (37.0 if eleven_a_side else 2.5)
+	var vertical_limit := 37.0 if on_handoff else (21.0 if eleven_a_side else 1.6)
 	focus.x = clampf(focus.x, -horizontal_limit, horizontal_limit)
-	if not on_goal:
+	if not close_view:
 		focus.y = 0.0
-	focus.z = clampf(focus.z, -21.0 if eleven_a_side else -1.6, 21.0 if eleven_a_side else 1.6)
+	focus.z = clampf(focus.z, -vertical_limit, vertical_limit)
 	camera_focus = camera_focus.lerp(focus, blend)
 	camera_offset = camera_offset.lerp(offset, blend)
 	camera.position = camera_focus + camera_offset

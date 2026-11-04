@@ -315,17 +315,23 @@ func throw_in_hand_center(_player: Node3D) -> Vector3:
 
 func _pose_throw_in(player: Node3D, phase: float) -> void:
 	# Move the hands around the crown before reaching forward for release.
+	var cradle := Vector3(0.136, 0.39, -0.38)
+	var high_front := Vector3(0.136, 1.02, -0.19)
 	var behind_head := Vector3(0.136, 0.880, 0.260)
 	var overhead := Vector3(0.136, 1.012, 0.000)
 	var release := Vector3(0.136, 0.930, -0.265)
 	var follow := Vector3(0.136, 0.700, -0.390)
 	var hand: Vector3
-	if phase < 0.43:
-		var swing := smoothstep(0.10, 0.43, phase)
+	if phase < 0.16:
+		hand = cradle.lerp(high_front, smoothstep(0.0, 0.16, phase))
+	elif phase < 0.33:
+		hand = high_front.lerp(behind_head, smoothstep(0.16, 0.33, phase))
+	elif phase < 0.51:
+		var swing := smoothstep(0.33, 0.51, phase)
 		hand = behind_head.lerp(overhead, swing)
 		hand.y += sin(swing * PI) * 0.047
 	elif phase < 0.7:
-		var swing := smoothstep(0.43, 0.7, phase)
+		var swing := smoothstep(0.51, 0.7, phase)
 		hand = overhead.lerp(release, swing)
 		hand.y += sin(swing * PI) * 0.038
 	else:
