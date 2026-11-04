@@ -233,7 +233,7 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 			if confidence < 0.8 + challenge_readiness and player.tackle(ball):
 				return "tackle"
 		elif ball_offset.length() < 2.6 and separation.length() < 2.8 and player.linear_velocity.length() > 3.5 and player.aim.dot(ball_offset.normalized()) > 0.85:
-			if confidence < 0.35 + player.ai_style * 0.35 + challenge_readiness and player.slide(ball):
+			if confidence < 0.35 + player.ai_style * 0.35 + challenge_readiness and _has_ball_first_slide(player, opponent_carrier, ball) and player.slide(ball):
 				return "slide"
 	# A first-time pass or shot can be queued against an actually reachable
 	# moving ball without first claiming a close-control state.
@@ -291,6 +291,31 @@ static func decide(player: FootballPlayer, players: Array[FootballPlayer], ball:
 		reason = "brief_decision_variation"
 	_emit_decision(player, options, "carry", {}, reason)
 	return ""
+
+static func _has_ball_first_slide(player: FootballPlayer, carrier: FootballPlayer, ball: FootballBall) -> bool:
+	var direction := _flat(player.aim).normalized()
+	var velocity := _flat(player.linear_velocity)
+	var entry_speed := velocity.dot(direction)
+	var roll := _flat(ball.linear_velocity)
+	var slide_speed := minf(entry_speed + 2.0, 7.0)
+	var closing_speed := slide_speed - roll.dot(direction)
+	if entry_speed < 2.8 or closing_speed <= 0.0 or ball.global_position.y > 0.28:
+		return false
+	# Forecast the early part of the existing slide, when the boot is low.
+	var ball_offset := _flat(ball.global_position - player.global_position)
+	var delay := (ball_offset.dot(direction) - 0.66) / closing_speed
+	if delay < 0.08 or delay > 0.26 or ball.global_position.y + ball.linear_velocity.y * delay > 0.30:
+		return false
+	var predicted_ball := ball_offset + roll * delay
+	var sideways := velocity - direction * entry_speed
+	var predicted_boot := direction * (slide_speed * delay + 0.66) + sideways * minf(delay, 0.09)
+	if predicted_boot.distance_squared_to(predicted_ball) > 0.22 * 0.22:
+		return false
+	var predicted_carrier := _flat(carrier.global_position - player.global_position + carrier.linear_velocity * delay)
+	var along_carrier := predicted_carrier.dot(direction)
+	var carrier_side := absf((predicted_carrier - predicted_boot).dot(direction.cross(Vector3.UP)))
+	# A carrier in front of the boot, or immediately beyond the ball, shields it.
+	return along_carrier < -0.15 or along_carrier > predicted_ball.dot(direction) + 0.65 or carrier_side > 0.62
 
 static func _queue_pass(player: FootballPlayer, ball: FootballBall, options: Dictionary, candidate: Dictionary, reason: String) -> bool:
 	var destination := _point(candidate["target"])
